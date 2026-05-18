@@ -24,6 +24,154 @@ struct ResponseMessage {
 }
 
 const ARIA2_RPC: &str = "http://127.0.0.1:6800/jsonrpc";
+const ARIA2_VERSION: &str = "1.37.0";
+
+/// Cek apakah aria2c tersedia di PATH
+fn is_aria2_installed() -> bool {
+    std::process::Command::new("aria2c")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Install aria2c secara otomatis sesuai OS
+async fn install_aria2() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    {
+        install_aria2_windows().await
+    }
+    #[cfg(target_os = "linux")]
+    {
+        install_aria2_linux().await
+    }
+    #[cfg(target_os = "macos")]
+    {
+        install_aria2_macos().await
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn install_aria2_windows() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    // Coba winget dulu
+    let winget = std::process::Command::new("winget")
+        .args(["install", "--id", "aria2.aria2", "--accept-package-agreements", "--accept-source-agreements", "--silent"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    if let Ok(out) = winget {
+        if out.status.success() {
+            return Ok(());
+        }
+    }
+
+    // Fallback: download dari GitHub
+    let url = format!(
+        "https://github.com/aria2/aria2/releases/download/release-{}/aria2-{}-win-64bit-build1.zip",
+        ARIA2_VERSION, ARIA2_VERSION
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Download aria2 gagal: HTTP {}", resp.status()).into());
+    }
+
+    let bytes = resp.bytes().await?;
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    let zip_path = exe_dir.join("aria2.zip");
+
+    std::fs::write(&zip_path, &bytes)?;
+
+    // Extract zip
+    std::process::Command::new("powershell")
+        .args([
+            "-Command",
+            &format!(
+                "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+                zip_path.display(),
+                exe_dir.display()
+            ),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+
+    // Move aria2c.exe ke folder yang sama
+    let extracted_dir = exe_dir.join(format!("aria2-{}-win-64bit-build1", ARIA2_VERSION));
+    let src = extracted_dir.join("aria2c.exe");
+    let dst = exe_dir.join("aria2c.exe");
+    if src.exists() {
+        let _ = std::fs::copy(&src, &dst);
+    }
+
+    // Cleanup
+    let _ = std::fs::remove_file(&zip_path);
+    let _ = std::fs::remove_dir_all(&extracted_dir);
+
+    if dst.exists() {
+        // Tambah ke PATH untuk session ini
+        if let Ok(path) = std::env::var("PATH") {
+            let new_path = format!("{};{}", exe_dir.display(), path);
+            unsafe { std::env::set_var("PATH", &new_path); }
+        }
+        Ok(())
+    } else {
+        Err("Gagal install aria2c".into())
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn install_aria2_linux() -> Result<(), Box<dyn std::error::Error>> {
+    // Coba berbagai package manager
+    let managers: Vec<(&str, Vec<&str>)> = vec![
+        ("apt-get", vec!["sudo", "apt-get", "install", "-y", "aria2"]),
+        ("dnf", vec!["sudo", "dnf", "install", "-y", "aria2"]),
+        ("pacman", vec!["sudo", "pacman", "-S", "--noconfirm", "aria2"]),
+        ("yum", vec!["sudo", "yum", "install", "-y", "aria2"]),
+    ];
+
+    for (name, args) in &managers {
+        // Cek apakah package manager ada
+        if std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            let status = std::process::Command::new(args[0])
+                .args(&args[1..])
+                .status();
+            if status.is_ok() && status.unwrap().success() {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("Tidak bisa install aria2. Install manual: sudo apt install aria2".into())
+}
+
+#[cfg(target_os = "macos")]
+async fn install_aria2_macos() -> Result<(), Box<dyn std::error::Error>> {
+    // Coba brew dulu
+    let brew = std::process::Command::new("brew")
+        .args(["install", "aria2"])
+        .status();
+
+    if brew.is_ok() && brew.unwrap().success() {
+        return Ok(());
+    }
+
+    Err("Tidak bisa install aria2. Install manual: brew install aria2".into())
+}
 
 async fn is_aria2_running() -> bool {
     let client = reqwest::Client::new();
@@ -57,6 +205,11 @@ async fn ensure_aria2_running() {
     if is_aria2_running().await {
         apply_aria2_config().await;
         return;
+    }
+
+    // Auto-install jika tidak ada di PATH
+    if !is_aria2_installed() {
+        let _ = install_aria2().await;
     }
 
     #[cfg(target_os = "windows")]
