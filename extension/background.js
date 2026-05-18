@@ -20,18 +20,19 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     requireInteraction: true
   });
 
-  // Extract download directory from browser's save path
+  // Extract download directory and filename from browser's save path
   let downloadDir = null;
+  let outFilename = null;
   if (downloadItem.filename) {
     // filename is full path like "C:\Users\kelvin\Downloads\file.zip"
     const parts = downloadItem.filename.replace(/\\/g, '/').split('/');
-    parts.pop(); // remove filename
-    downloadDir = parts.join('/');
+    outFilename = parts.pop(); // just the filename
+    downloadDir = parts.join('/'); // just the directory
   }
 
   sendToNativeHost({
     url: downloadItem.url,
-    filename: downloadItem.filename || null,
+    filename: outFilename,
     dir: downloadDir,
     headers: {
       "User-Agent": navigator.userAgent,
