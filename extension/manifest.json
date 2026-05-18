@@ -20,7 +20,14 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "BR Download Manager"
+    "default_icon": {
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
   },
   "minimum_chrome_version": "88"
 }
