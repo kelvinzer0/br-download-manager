@@ -12,6 +12,20 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
+// Event delegation for action buttons - works even after innerHTML replace
+document.getElementById('download-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const command = btn.dataset.command;
+  const gid = btn.dataset.gid;
+  if (command && gid) {
+    controlDownload(command, gid);
+  }
+});
+
 function formatBytes(bytes) {
   if (!bytes || bytes === '0') return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -59,24 +73,24 @@ function getActionButtons(dl) {
   const gid = dl.gid;
   if (dl.status === 'active') {
     return `
-      <button class="btn btn-pause" onclick="controlDownload('pause', '${gid}')">Pause</button>
-      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+      <button class="btn btn-pause" data-command="pause" data-gid="${gid}">Pause</button>
+      <button class="btn btn-cancel" data-command="cancel" data-gid="${gid}">Cancel</button>
     `;
   }
   if (dl.status === 'paused') {
     return `
-      <button class="btn btn-resume" onclick="controlDownload('unpause', '${gid}')">Resume</button>
-      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+      <button class="btn btn-resume" data-command="unpause" data-gid="${gid}">Resume</button>
+      <button class="btn btn-cancel" data-command="cancel" data-gid="${gid}">Cancel</button>
     `;
   }
   if (dl.status === 'waiting') {
     return `
-      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+      <button class="btn btn-cancel" data-command="cancel" data-gid="${gid}">Cancel</button>
     `;
   }
   if (dl.status === 'error' || dl.status === 'removed') {
     return `
-      <button class="btn btn-retry" onclick="controlDownload('retry', '${gid}')">Retry</button>
+      <button class="btn btn-retry" data-command="retry" data-gid="${gid}">Retry</button>
     `;
   }
   return '';
@@ -153,9 +167,11 @@ function renderDownloads(data) {
 }
 
 async function controlDownload(command, gid) {
-  // Disable all buttons and show loading
-  document.querySelectorAll('.btn').forEach(b => {
+  // Visual feedback
+  const btns = document.querySelectorAll('.btn');
+  btns.forEach(b => {
     b.disabled = true;
+    b.dataset.originalText = b.textContent;
     b.textContent = '...';
   });
 
@@ -166,16 +182,14 @@ async function controlDownload(command, gid) {
       gid: gid
     });
     console.log('Control response:', response);
-
-    // Refresh immediately and again after 500ms
-    fetchDownloads();
-    setTimeout(fetchDownloads, 500);
-    setTimeout(fetchDownloads, 1000);
   } catch (e) {
     console.error('Control error:', e);
-    // Refresh anyway to reset button states
-    fetchDownloads();
   }
+
+  // Refresh
+  fetchDownloads();
+  setTimeout(fetchDownloads, 500);
+  setTimeout(fetchDownloads, 1000);
 }
 
 async function fetchDownloads() {
