@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BR Download Manager",
-  "version": "1.1",
+  "version": "1.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyYk7bB0vK07u29x/YNE6ui6lYn3+hnvnAkodxnPKzg/3aq1EgeSG0qKuH131CJHyWzIt6hoOW3dKpS3+AIQIWLyq97K4zzBdJxtnIvAmjvRTIVEqhGML/cYYit8EYZzSipfH+TchFnAw/bCHb/QUBeZ5doQjzsUmiUzpaKle/pGzkqpEZZEyb+PTZU1gOSYe43+SabXfb0a2jOCZfKzcpk7GG6BvIuGA/zDgBVhZPlI5EukLOIIZqrPv/t354uogoK7eD/vpS29OSP2/+3geeZlKkLMLGjI1NPHCo4rLJi9k4p3hLrok4u+TBu504RZ2ShKgEFTamieJ7Y2AcQyeOwIDAQAB",
   "description": "Forward downloads to aria2 via Rust Native Host",
   "permissions": [
@@ -9,7 +9,8 @@
     "nativeMessaging",
     "downloads.shelf",
     "notifications",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1:6800/*"

@@ -1,5 +1,6 @@
 let currentTab = 'active';
 let refreshInterval;
+let lastData = null;
 
 // Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
@@ -7,11 +8,10 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     currentTab = tab.dataset.tab;
-    renderDownloads();
+    renderDownloads(lastData);
   });
 });
 
-// Format bytes
 function formatBytes(bytes) {
   if (!bytes || bytes === '0') return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -19,13 +19,11 @@ function formatBytes(bytes) {
   return (bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
 }
 
-// Format speed
 function formatSpeed(bytesPerSec) {
   if (!bytesPerSec || bytesPerSec === '0') return '0 B/s';
   return formatBytes(bytesPerSec) + '/s';
 }
 
-// Format ETA
 function formatEta(completed, total, speed) {
   if (!speed || speed === '0' || !total || total === '0') return '--';
   const remaining = (total - completed) / speed;
@@ -34,7 +32,6 @@ function formatEta(completed, total, speed) {
   return Math.round(remaining / 3600) + 'h';
 }
 
-// Get filename from download item
 function getFilename(dl) {
   if (dl.files && dl.files[0]) {
     const path = dl.files[0].path;
@@ -46,7 +43,6 @@ function getFilename(dl) {
   return 'Unknown file';
 }
 
-// Get status badge
 function getStatusBadge(status) {
   const map = {
     active: '<span class="dl-status-badge badge-active">Downloading</span>',
@@ -59,7 +55,33 @@ function getStatusBadge(status) {
   return map[status] || '';
 }
 
-// Render download items
+function getActionButtons(dl) {
+  const gid = dl.gid;
+  if (dl.status === 'active') {
+    return `
+      <button class="btn btn-pause" onclick="controlDownload('pause', '${gid}')">Pause</button>
+      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+    `;
+  }
+  if (dl.status === 'paused') {
+    return `
+      <button class="btn btn-resume" onclick="controlDownload('unpause', '${gid}')">Resume</button>
+      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+    `;
+  }
+  if (dl.status === 'waiting') {
+    return `
+      <button class="btn btn-cancel" onclick="controlDownload('cancel', '${gid}')">Cancel</button>
+    `;
+  }
+  if (dl.status === 'error' || dl.status === 'removed') {
+    return `
+      <button class="btn btn-retry" onclick="controlDownload('retry', '${gid}')">Retry</button>
+    `;
+  }
+  return '';
+}
+
 function renderDownloadItem(dl) {
   const total = parseInt(dl.totalLength) || 0;
   const completed = parseInt(dl.completedLength) || 0;
@@ -69,7 +91,10 @@ function renderDownloadItem(dl) {
 
   return `
     <div class="download-item">
-      <div class="dl-filename">${escapeHtml(filename)} ${getStatusBadge(dl.status)}</div>
+      <div class="dl-header">
+        <div class="dl-filename">${escapeHtml(filename)} ${getStatusBadge(dl.status)}</div>
+        <div class="dl-actions">${getActionButtons(dl)}</div>
+      </div>
       <div class="dl-progress-bar">
         <div class="dl-progress-fill" style="width: ${percent}%"></div>
       </div>
@@ -90,7 +115,6 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Main render
 function renderDownloads(data) {
   const list = document.getElementById('download-list');
   const empty = document.getElementById('no-downloads');
@@ -128,10 +152,27 @@ function renderDownloads(data) {
   }
 }
 
-// Fetch data from background
+async function controlDownload(command, gid) {
+  // Disable buttons temporarily
+  document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+
+  try {
+    await chrome.runtime.sendMessage({
+      action: 'controlDownload',
+      command: command,
+      gid: gid
+    });
+    // Refresh immediately
+    setTimeout(fetchDownloads, 300);
+  } catch (e) {
+    console.error('Control error:', e);
+  }
+}
+
 async function fetchDownloads() {
   try {
     const data = await chrome.runtime.sendMessage({action: 'getDownloads'});
+    lastData = data;
     renderDownloads(data);
   } catch (e) {
     renderDownloads({error: e.message});
@@ -142,7 +183,6 @@ async function fetchDownloads() {
 fetchDownloads();
 refreshInterval = setInterval(fetchDownloads, 1000);
 
-// Cleanup on close
 window.addEventListener('unload', () => {
   clearInterval(refreshInterval);
 });

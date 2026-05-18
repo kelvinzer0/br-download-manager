@@ -1,16 +1,15 @@
-// Track active downloads for popup
-let activeDownloads = [];
+// Track active downloads with GID
+let downloadGids = new Set();
+let tabDiscarded = false;
 
 chrome.downloads.onCreated.addListener((downloadItem) => {
   if (downloadItem.state !== 'in_progress') return;
 
-  // Cancel browser download
   chrome.downloads.cancel(downloadItem.id);
   chrome.downloads.erase({id: downloadItem.id});
 
   const filename = downloadItem.filename || downloadItem.url.split('/').pop() || 'Unknown';
 
-  // Show notification
   chrome.notifications.create(`dl-${downloadItem.id}`, {
     type: 'basic',
     iconUrl: 'icon48.png',
@@ -20,10 +19,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     requireInteraction: true
   });
 
-  // Send to native host
-  const port = chrome.runtime.connectNative('com.br.download.manager');
-
-  port.postMessage({
+  sendToNativeHost({
     url: downloadItem.url,
     filename: downloadItem.filename || null,
     headers: {
@@ -31,9 +27,18 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
       "Referer": downloadItem.referrer || ""
     }
   });
+});
+
+// Send message to native host and handle response
+function sendToNativeHost(message) {
+  const port = chrome.runtime.connectNative('com.br.download.manager');
 
   port.onMessage.addListener((response) => {
     console.log("Response from Rust:", response);
+    if (response.gid) {
+      downloadGids.add(response.gid);
+      chrome.storage.local.set({downloadGids: Array.from(downloadGids)});
+    }
     port.disconnect();
   });
 
@@ -42,13 +47,46 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
       console.error("Native Host Error:", chrome.runtime.lastError.message);
     }
   });
-});
+
+  port.postMessage(message);
+}
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getDownloads') {
     fetchAria2Status().then(sendResponse);
-    return true; // async response
+    return true;
+  }
+
+  if (request.action === 'controlDownload') {
+    // Forward pause/cancel/retry/unpause to native host
+    const port = chrome.runtime.connectNative('com.br.download.manager');
+
+    port.onMessage.addListener((response) => {
+      console.log("Control response:", response);
+      sendResponse(response);
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      if (chrome.runtime.lastError) {
+        sendResponse({status: 'error', message: chrome.runtime.lastError.message});
+      }
+    });
+
+    port.postMessage({
+      action: request.command,
+      gid: request.gid
+    });
+    return true;
+  }
+
+  if (request.action === 'getActiveCount') {
+    fetchAria2Status().then(data => {
+      const count = data.active ? data.active.length : 0;
+      sendResponse({count});
+    });
+    return true;
   }
 });
 
@@ -80,6 +118,10 @@ async function fetchAria2Status() {
       aria2Call('aria2.tellWaiting', [0, 100]),
       aria2Call('aria2.tellStopped', [0, 50])
     ]);
+
+    // Update tab discard based on active downloads
+    manageTabDiscard(active.length > 0);
+
     return {active, waiting, stopped};
   } catch (e) {
     const msg = e.name === 'AbortError'
@@ -88,3 +130,39 @@ async function fetchAria2Status() {
     return {error: msg, active: [], waiting: [], stopped: []};
   }
 }
+
+// Discard browser tabs when download is active to free network bandwidth
+async function manageTabDiscard(hasActiveDownloads) {
+  if (hasActiveDownloads && !tabDiscarded) {
+    try {
+      const tabs = await chrome.tabs.query({});
+      const activeTab = tabs.find(t => t.active);
+
+      for (const tab of tabs) {
+        // Don't discard active tab or pinned tabs
+        if (tab.active || tab.pinned || tab.discarded) continue;
+        // Don't discard chrome:// or extension pages
+        if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) continue;
+
+        try {
+          await chrome.tabs.discard(tab.id);
+        } catch (e) {
+          // Tab might not be discardable
+        }
+      }
+      tabDiscarded = true;
+      console.log("Background tabs discarded to free network for download");
+    } catch (e) {
+      console.error("Tab discard error:", e);
+    }
+  } else if (!hasActiveDownloads) {
+    tabDiscarded = false;
+  }
+}
+
+// Restore GIDs from storage on startup
+chrome.storage.local.get('downloadGids', (data) => {
+  if (data.downloadGids) {
+    downloadGids = new Set(data.downloadGids);
+  }
+});
