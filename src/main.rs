@@ -10,6 +10,7 @@ struct DownloadMessage {
     #[serde(default)]
     url: String,
     filename: Option<String>,
+    dir: Option<String>,
     headers: Option<std::collections::HashMap<String, String>>,
     action: Option<String>,
     gid: Option<String>,
@@ -125,6 +126,9 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
     let mut options = serde_json::Map::new();
     if let Some(filename) = msg.filename {
         options.insert("out".to_string(), json!(filename));
+    }
+    if let Some(dir) = msg.dir {
+        options.insert("dir".to_string(), json!(dir));
     }
     if let Some(headers) = msg.headers {
         let header_list: Vec<String> = headers
