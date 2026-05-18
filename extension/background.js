@@ -1,5 +1,6 @@
 // Track active downloads with GID
 let downloadGids = new Set();
+let discardedTabIds = [];
 let tabDiscarded = false;
 
 chrome.downloads.onCreated.addListener((downloadItem) => {
@@ -136,26 +137,35 @@ async function manageTabDiscard(hasActiveDownloads) {
   if (hasActiveDownloads && !tabDiscarded) {
     try {
       const tabs = await chrome.tabs.query({});
-      const activeTab = tabs.find(t => t.active);
+      discardedTabIds = [];
 
       for (const tab of tabs) {
-        // Don't discard active tab or pinned tabs
         if (tab.active || tab.pinned || tab.discarded) continue;
-        // Don't discard chrome:// or extension pages
         if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) continue;
 
         try {
           await chrome.tabs.discard(tab.id);
+          discardedTabIds.push(tab.id);
         } catch (e) {
           // Tab might not be discardable
         }
       }
       tabDiscarded = true;
-      console.log("Background tabs discarded to free network for download");
+      console.log(`Discarded ${discardedTabIds.length} tabs to free network for download`);
     } catch (e) {
       console.error("Tab discard error:", e);
     }
-  } else if (!hasActiveDownloads) {
+  } else if (!hasActiveDownloads && tabDiscarded) {
+    // Restore all discarded tabs by reloading
+    for (const tabId of discardedTabIds) {
+      try {
+        await chrome.tabs.reload(tabId);
+      } catch (e) {
+        // Tab might have been closed already
+      }
+    }
+    console.log(`Restored ${discardedTabIds.length} tabs after download`);
+    discardedTabIds = [];
     tabDiscarded = false;
   }
 }
