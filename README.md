@@ -48,6 +48,20 @@ Once installed, simply click any download link in your browser. The extension wi
 3. Send the URL and metadata to the Rust Native Host.
 4. The Rust Host will tell `aria2` to start the download.
 
+## 📊 Monitoring & Settings
+
+### 1. View Download Progress
+Since this tool uses `aria2` as its engine, you have several ways to see your downloads:
+- **Terminal:** If you run `aria2c` in a terminal, you will see the progress bars directly there.
+- **Web UI (Recommended):** Use [AriaNg](https://github.com/mayswind/AriaNg) (a powerful web dashboard). Just open the AriaNg page, and it will automatically connect to your local `aria2`.
+
+### 2. Download Directory
+By default, files are saved in the **folder where you launched `aria2c`**.
+To specify a custom download folder, start `aria2c` with the `--dir` flag:
+```bash
+aria2c --enable-rpc --rpc-listen-all --dir="C:\Downloads"
+```
+
 ## 🏗️ Development
 
 If you want to build from source:
