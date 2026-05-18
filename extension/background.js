@@ -52,51 +52,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// Fetch download status from aria2 RPC
+const ARIA2_RPC = 'http://127.0.0.1:6800/jsonrpc';
+
+async function aria2Call(method, params = []) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(ARIA2_RPC, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({jsonrpc: '2.0', id: 'br', method, params}),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const json = await res.json();
+    return json.result || [];
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
+  }
+}
+
 async function fetchAria2Status() {
   try {
-    const res = await fetch('http://localhost:6800/jsonrpc', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'br-status',
-        method: 'aria2.tellActive',
-        params: []
-      })
-    });
-    const active = await res.json();
-
-    const resWaiting = await fetch('http://localhost:6800/jsonrpc', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'br-waiting',
-        method: 'aria2.tellWaiting',
-        params: [0, 100]
-      })
-    });
-    const waiting = await resWaiting.json();
-
-    const resStopped = await fetch('http://localhost:6800/jsonrpc', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'br-stopped',
-        method: 'aria2.tellStopped',
-        params: [0, 50]
-      })
-    });
-    const stopped = await resStopped.json();
-
-    return {
-      active: active.result || [],
-      waiting: waiting.result || [],
-      stopped: stopped.result || []
-    };
+    const [active, waiting, stopped] = await Promise.all([
+      aria2Call('aria2.tellActive'),
+      aria2Call('aria2.tellWaiting', [0, 100]),
+      aria2Call('aria2.tellStopped', [0, 50])
+    ]);
+    return {active, waiting, stopped};
   } catch (e) {
-    return {error: e.message, active: [], waiting: [], stopped: []};
+    const msg = e.name === 'AbortError'
+      ? 'Timeout - aria2 tidak merespons dalam 3 detik'
+      : 'Gagal konek ke aria2 di 127.0.0.1:6800 - ' + e.message;
+    return {error: msg, active: [], waiting: [], stopped: []};
   }
 }
