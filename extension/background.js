@@ -3,13 +3,15 @@ let downloadGids = new Set();
 let discardedTabIds = [];
 let tabDiscarded = false;
 
-chrome.downloads.onCreated.addListener((downloadItem) => {
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (downloadItem.state !== 'in_progress') return;
 
   chrome.downloads.cancel(downloadItem.id);
   chrome.downloads.erase({id: downloadItem.id});
 
-  const filename = downloadItem.filename || downloadItem.url.split('/').pop() || 'Unknown';
+  // Use finalUrl (after redirect) if available, fallback to url
+  const downloadUrl = downloadItem.finalUrl || downloadItem.url;
+  const filename = downloadItem.filename || downloadUrl.split('/').split('?')[0].pop() || 'Unknown';
 
   chrome.notifications.create(`dl-${downloadItem.id}`, {
     type: 'basic',
@@ -24,20 +26,41 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
   let downloadDir = null;
   let outFilename = null;
   if (downloadItem.filename) {
-    // filename is full path like "C:\Users\kelvin\Downloads\file.zip"
     const parts = downloadItem.filename.replace(/\\/g, '/').split('/');
-    outFilename = parts.pop(); // just the filename
-    downloadDir = parts.join('/'); // just the directory
+    outFilename = parts.pop();
+    downloadDir = parts.join('/');
+  }
+
+  // Fetch cookies for the download URL
+  const headers = {
+    "User-Agent": navigator.userAgent,
+    "Referer": downloadItem.referrer || ""
+  };
+
+  try {
+    const cookies = await chrome.cookies.getAll({url: downloadUrl});
+    if (cookies.length > 0) {
+      headers["Cookie"] = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (e) {
+    console.log("Cookie fetch error:", e);
+  }
+
+  // Also try original URL cookies if different (redirect case)
+  if (downloadItem.url && downloadItem.url !== downloadUrl) {
+    try {
+      const origCookies = await chrome.cookies.getAll({url: downloadItem.url});
+      if (origCookies.length > 0 && !headers["Cookie"]) {
+        headers["Cookie"] = origCookies.map(c => `${c.name}=${c.value}`).join('; ');
+      }
+    } catch (e) {}
   }
 
   sendToNativeHost({
-    url: downloadItem.url,
+    url: downloadUrl,
     filename: outFilename,
     dir: downloadDir,
-    headers: {
-      "User-Agent": navigator.userAgent,
-      "Referer": downloadItem.referrer || ""
-    }
+    headers: headers
   });
 });
 

@@ -10,10 +10,12 @@
     "downloads.shelf",
     "notifications",
     "storage",
-    "tabs"
+    "tabs",
+    "cookies"
   ],
   "host_permissions": [
-    "http://127.0.0.1:6800/*"
+    "http://127.0.0.1:6800/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
