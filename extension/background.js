@@ -151,7 +151,17 @@ async function manageTabDiscard(hasActiveDownloads) {
         }
       }
       tabDiscarded = true;
-      console.log(`Discarded ${discardedTabIds.length} tabs to free network for download`);
+      const count = discardedTabIds.length;
+      console.log(`Discarded ${count} tabs to free network for download`);
+      if (count > 0) {
+        chrome.notifications.create('tabs-discarded', {
+          type: 'basic',
+          iconUrl: 'icon48.png',
+          title: 'BR Download Manager',
+          message: `${count} tab diistirahatkan sementara untuk fokus bandwidth download.\nTab akan dikembalikan otomatis setelah download selesai.`,
+          priority: 1
+        });
+      }
     } catch (e) {
       console.error("Tab discard error:", e);
     }
@@ -164,7 +174,17 @@ async function manageTabDiscard(hasActiveDownloads) {
         // Tab might have been closed already
       }
     }
-    console.log(`Restored ${discardedTabIds.length} tabs after download`);
+    const count = discardedTabIds.length;
+    console.log(`Restored ${count} tabs after download`);
+    if (count > 0) {
+      chrome.notifications.create('tabs-restored', {
+        type: 'basic',
+        iconUrl: 'icon48.png',
+        title: 'BR Download Manager',
+        message: `Download selesai! ${count} tab sudah dikembalikan.`,
+        priority: 1
+      });
+    }
     discardedTabIds = [];
     tabDiscarded = false;
   }
