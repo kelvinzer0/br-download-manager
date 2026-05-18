@@ -8,7 +8,7 @@ $manifest = @{
     description = "Bridge for aria2 Download Manager (Rust)"
     path = $exePath
     type = "stdio"
-    allowed_origins = @("chrome-extension://ocmcokpmlidmblemdlcknbejdikmkkle/")
+    allowed_origins = @("chrome-extension://obbofbgglodjehllcnfggbmjhpcphlbl/")
 } | ConvertTo-Json
 
 $manifest | Out-File -FilePath $manifestPath -Encoding utf8
