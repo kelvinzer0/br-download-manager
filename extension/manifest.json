@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "BR Download Manager",
+  "version": "1.0",
+  "description": "Forward downloads to aria2 via Rust Native Host",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "downloads.shelf"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "minimum_chrome_version": "88"
+}
