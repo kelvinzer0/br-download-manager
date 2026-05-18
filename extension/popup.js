@@ -150,9 +150,9 @@ function renderDownloads(data) {
   document.getElementById('status').className = 'status connected';
 
   let items = [];
-  if (currentTab === 'active') items = data.active || [];
-  else if (currentTab === 'waiting') items = data.waiting || [];
-  else if (currentTab === 'completed') items = data.stopped || [];
+  if (currentTab === 'active') items = (data.active || []).reverse();
+  else if (currentTab === 'waiting') items = (data.waiting || []).reverse();
+  else if (currentTab === 'completed') items = (data.stopped || []).reverse();
 
   if (items.length === 0) {
     list.style.display = 'none';
