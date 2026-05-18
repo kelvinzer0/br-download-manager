@@ -153,19 +153,28 @@ function renderDownloads(data) {
 }
 
 async function controlDownload(command, gid) {
-  // Disable buttons temporarily
-  document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+  // Disable all buttons and show loading
+  document.querySelectorAll('.btn').forEach(b => {
+    b.disabled = true;
+    b.textContent = '...';
+  });
 
   try {
-    await chrome.runtime.sendMessage({
+    const response = await chrome.runtime.sendMessage({
       action: 'controlDownload',
       command: command,
       gid: gid
     });
-    // Refresh immediately
-    setTimeout(fetchDownloads, 300);
+    console.log('Control response:', response);
+
+    // Refresh immediately and again after 500ms
+    fetchDownloads();
+    setTimeout(fetchDownloads, 500);
+    setTimeout(fetchDownloads, 1000);
   } catch (e) {
     console.error('Control error:', e);
+    // Refresh anyway to reset button states
+    fetchDownloads();
   }
 }
 

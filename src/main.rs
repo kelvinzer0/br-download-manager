@@ -42,8 +42,19 @@ async fn is_aria2_running() -> bool {
     )
 }
 
+async fn apply_aria2_config() {
+    let _ = aria2_call("aria2.changeGlobalOption", json!([{
+        "max-concurrent-downloads": "16",
+        "split": "16",
+        "min-split-size": "1M",
+        "max-connection-per-server": "16",
+        "continue": "true"
+    }])).await;
+}
+
 async fn ensure_aria2_running() {
     if is_aria2_running().await {
+        apply_aria2_config().await;
         return;
     }
 
@@ -143,11 +154,10 @@ async fn handle_action(action: &str, gid: &str) -> Result<String, Box<dyn std::e
             Ok("Resumed".to_string())
         }
         "cancel" => {
-            aria2_call("aria2.remove", json!([gid])).await?;
+            aria2_call("aria2.forceRemove", json!([gid])).await?;
             Ok("Cancelled".to_string())
         }
         "retry" => {
-            // Get the download info first, then re-add
             let info = aria2_call("aria2.getFiles", json!([gid])).await?;
             let url = if let Some(files) = info.as_array() {
                 if let Some(file) = files.first() {
@@ -165,7 +175,6 @@ async fn handle_action(action: &str, gid: &str) -> Result<String, Box<dyn std::e
                 return Err("Cannot find original URL for retry".into());
             }
 
-            // Remove old entry and re-add
             let _ = aria2_call("aria2.removeDownloadResult", json!([gid])).await;
             let new_gid = aria2_call("aria2.addUri", json!([[url]])).await?;
             Ok(new_gid.as_str().unwrap_or("").to_string())
