@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self, Read, Write};
+use std::time::Duration;
 use tokio;
 use reqwest;
 
@@ -17,9 +18,64 @@ struct ResponseMessage {
     message: String,
 }
 
-async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error::Error>> {
+const ARIA2_RPC: &str = "http://127.0.0.1:6800/jsonrpc";
+
+/// Cek apakah aria2 RPC sudah berjalan
+async fn is_aria2_running() -> bool {
     let client = reqwest::Client::new();
-    let rpc_url = "http://localhost:6800/jsonrpc";
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": "ping",
+        "method": "aria2.getVersion",
+        "params": []
+    });
+    matches!(
+        client.post(ARIA2_RPC)
+            .timeout(Duration::from_secs(2))
+            .json(&payload)
+            .send()
+            .await,
+        Ok(resp) if resp.status().is_success()
+    )
+}
+
+/// Jalankan aria2c sebagai daemon jika belum running
+async fn ensure_aria2_running() {
+    if is_aria2_running().await {
+        return;
+    }
+
+    // Spawn aria2c di background
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let _ = std::process::Command::new("aria2c")
+            .args(["--enable-rpc", "--rpc-listen-all", "--daemon=true"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("aria2c")
+            .args(["--enable-rpc", "--rpc-listen-all", "--daemon=true"])
+            .spawn();
+    }
+
+    // Tunggu sampai aria2 siap (max 5 detik)
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if is_aria2_running().await {
+            return;
+        }
+    }
+}
+
+async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error::Error>> {
+    // Pastikan aria2 berjalan
+    ensure_aria2_running().await;
+
+    let client = reqwest::Client::new();
 
     let mut options = serde_json::Map::new();
     if let Some(filename) = msg.filename {
@@ -41,7 +97,7 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
         "params": [vec![msg.url], options]
     });
 
-    let res = client.post(rpc_url)
+    let res = client.post(ARIA2_RPC)
         .json(&payload)
         .send()
         .await?;
