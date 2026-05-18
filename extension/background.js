@@ -2,18 +2,86 @@
 let downloadGids = new Set();
 let discardedTabIds = [];
 let tabDiscarded = false;
+// Track pending downloads waiting for filename
+let pendingDownloads = {};
 
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (downloadItem.state !== 'in_progress') return;
 
-  chrome.downloads.cancel(downloadItem.id);
-  chrome.downloads.erase({id: downloadItem.id});
-
-  // Use finalUrl (after redirect) if available, fallback to url
+  const downloadId = downloadItem.id;
   const downloadUrl = downloadItem.finalUrl || downloadItem.url;
-  const filename = downloadItem.filename || downloadUrl.split('/').split('?')[0].pop() || 'Unknown';
 
-  chrome.notifications.create(`dl-${downloadItem.id}`, {
+  // Get filename - might be empty at this point
+  let filename = downloadItem.filename || null;
+
+  // Extract from URL if needed
+  if (!filename) {
+    try {
+      const urlPath = new URL(downloadUrl).pathname;
+      const segments = urlPath.split('/').filter(s => s.length > 0);
+      const last = segments[segments.length - 1] || '';
+      filename = last.split('?')[0] || null;
+    } catch (e) {}
+  }
+
+  // Store pending download info
+  pendingDownloads[downloadId] = {
+    url: downloadUrl,
+    originalUrl: downloadItem.url,
+    filename: filename,
+    referrer: downloadItem.referrer || '',
+    queued: Date.now()
+  };
+
+  // If filename is empty, wait for it via onChanged
+  if (!filename || filename === 'Unknown') {
+    console.log(`Waiting for filename for download ${downloadId}...`);
+    // Still try to get cookies and proceed after a short delay
+    setTimeout(async () => {
+      if (pendingDownloads[downloadId]) {
+        await processDownload(downloadId);
+      }
+    }, 1000);
+    return;
+  }
+
+  await processDownload(downloadId);
+});
+
+// Listen for filename changes
+chrome.downloads.onChanged.addListener(async (delta) => {
+  if (delta.filename && delta.filename.current) {
+    const downloadId = delta.id;
+    if (pendingDownloads[downloadId]) {
+      // Chrome sets full path, extract just the filename
+      const fullPath = delta.filename.current;
+      const parts = fullPath.replace(/\\/g, '/').split('/');
+      pendingDownloads[downloadId].filename = parts.pop();
+      pendingDownloads[downloadId].downloadDir = parts.join('/');
+
+      console.log(`Filename resolved: ${pendingDownloads[downloadId].filename}`);
+      await processDownload(downloadId);
+    }
+  }
+});
+
+async function processDownload(downloadId) {
+  const pending = pendingDownloads[downloadId];
+  if (!pending) return;
+
+  // Cancel and erase browser download
+  try {
+    await chrome.downloads.cancel(downloadId);
+    await chrome.downloads.erase({id: downloadId});
+  } catch (e) {
+    // Download might already be cancelled
+  }
+
+  const filename = pending.filename || 'Unknown';
+  const downloadUrl = pending.url;
+
+  // Notification
+  chrome.notifications.create(`dl-${downloadId}`, {
     type: 'basic',
     iconUrl: 'icon48.png',
     title: 'BR Download Manager',
@@ -22,21 +90,13 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     requireInteraction: true
   });
 
-  // Extract download directory and filename from browser's save path
-  let downloadDir = null;
-  let outFilename = null;
-  if (downloadItem.filename) {
-    const parts = downloadItem.filename.replace(/\\/g, '/').split('/');
-    outFilename = parts.pop();
-    downloadDir = parts.join('/');
-  }
-
-  // Fetch cookies for the download URL
+  // Build headers
   const headers = {
     "User-Agent": navigator.userAgent,
-    "Referer": downloadItem.referrer || ""
+    "Referer": pending.referrer
   };
 
+  // Fetch cookies for download URL
   try {
     const cookies = await chrome.cookies.getAll({url: downloadUrl});
     if (cookies.length > 0) {
@@ -47,14 +107,27 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   }
 
   // Also try original URL cookies if different (redirect case)
-  if (downloadItem.url && downloadItem.url !== downloadUrl) {
+  if (pending.originalUrl && pending.originalUrl !== downloadUrl) {
     try {
-      const origCookies = await chrome.cookies.getAll({url: downloadItem.url});
+      const origCookies = await chrome.cookies.getAll({url: pending.originalUrl});
       if (origCookies.length > 0 && !headers["Cookie"]) {
         headers["Cookie"] = origCookies.map(c => `${c.name}=${c.value}`).join('; ');
       }
     } catch (e) {}
   }
+
+  // Build out filename (just the name, not full path)
+  let outFilename = filename;
+  let downloadDir = pending.downloadDir || null;
+
+  // If we have a full path, split it
+  if (outFilename && outFilename.includes('/') || outFilename.includes('\\')) {
+    const parts = outFilename.replace(/\\/g, '/').split('/');
+    outFilename = parts.pop();
+    if (!downloadDir) downloadDir = parts.join('/');
+  }
+
+  console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}`);
 
   sendToNativeHost({
     url: downloadUrl,
@@ -62,7 +135,10 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     dir: downloadDir,
     headers: headers
   });
-});
+
+  // Cleanup
+  delete pendingDownloads[downloadId];
+}
 
 // Send message to native host and handle response
 function sendToNativeHost(message) {
@@ -94,7 +170,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'controlDownload') {
-    // Forward pause/cancel/retry/unpause to native host
     const port = chrome.runtime.connectNative('com.br.download.manager');
 
     port.onMessage.addListener((response) => {
@@ -154,7 +229,6 @@ async function fetchAria2Status() {
       aria2Call('aria2.tellStopped', [0, 50])
     ]);
 
-    // Update tab discard based on active downloads
     manageTabDiscard(active.length > 0);
 
     return {active, waiting, stopped};
@@ -200,7 +274,6 @@ async function manageTabDiscard(hasActiveDownloads) {
       console.error("Tab discard error:", e);
     }
   } else if (!hasActiveDownloads && tabDiscarded) {
-    // Restore all discarded tabs by reloading
     for (const tabId of discardedTabIds) {
       try {
         await chrome.tabs.reload(tabId);
