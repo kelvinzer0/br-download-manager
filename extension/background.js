@@ -169,6 +169,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === 'openFile') {
+    const port = chrome.runtime.connectNative('com.br.download.manager');
+
+    port.onMessage.addListener((response) => {
+      console.log("Open file response:", response);
+      sendResponse(response);
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      if (chrome.runtime.lastError) {
+        sendResponse({status: 'error', message: chrome.runtime.lastError.message});
+      }
+    });
+
+    port.postMessage({
+      action: 'openFile',
+      path: request.path
+    });
+    return true;
+  }
+
   if (request.action === 'controlDownload') {
     const port = chrome.runtime.connectNative('com.br.download.manager');
 

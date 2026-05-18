@@ -21,7 +21,11 @@ document.getElementById('download-list').addEventListener('click', (e) => {
 
   const command = btn.dataset.command;
   const gid = btn.dataset.gid;
-  if (command && gid) {
+  const path = btn.dataset.path;
+
+  if (command === 'openFile' && path) {
+    openFile(path);
+  } else if (command && gid) {
     controlDownload(command, gid);
   }
 });
@@ -69,8 +73,16 @@ function getStatusBadge(status) {
   return map[status] || '';
 }
 
+function getFilePath(dl) {
+  if (dl.files && dl.files[0] && dl.files[0].path) {
+    return dl.files[0].path;
+  }
+  return '';
+}
+
 function getActionButtons(dl) {
   const gid = dl.gid;
+  const filePath = getFilePath(dl);
   if (dl.status === 'active') {
     return `
       <button class="btn btn-pause" data-command="pause" data-gid="${gid}">Pause</button>
@@ -86,6 +98,11 @@ function getActionButtons(dl) {
   if (dl.status === 'waiting') {
     return `
       <button class="btn btn-cancel" data-command="cancel" data-gid="${gid}">Cancel</button>
+    `;
+  }
+  if (dl.status === 'complete' && filePath) {
+    return `
+      <button class="btn btn-open" data-command="openFile" data-path="${escapeHtml(filePath)}">Open</button>
     `;
   }
   if (dl.status === 'error' || dl.status === 'removed') {
@@ -163,6 +180,14 @@ function renderDownloads(data) {
     list.style.display = 'block';
     empty.style.display = 'none';
     list.innerHTML = items.map(renderDownloadItem).join('');
+  }
+}
+
+async function openFile(path) {
+  try {
+    await chrome.runtime.sendMessage({action: 'openFile', path: path});
+  } catch (e) {
+    console.error('Open file error:', e);
   }
 }
 

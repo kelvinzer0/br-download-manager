@@ -14,6 +14,7 @@ struct DownloadMessage {
     headers: Option<std::collections::HashMap<String, String>>,
     action: Option<String>,
     gid: Option<String>,
+    path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -273,6 +274,31 @@ async fn aria2_call(method: &str, params: serde_json::Value) -> Result<serde_jso
     Ok(body.get("result").cloned().unwrap_or(serde_json::Value::Null))
 }
 
+fn open_file(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()?;
+    }
+    Ok(())
+}
+
 async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error::Error>> {
     ensure_aria2_running().await;
 
@@ -378,8 +404,19 @@ async fn main() -> io::Result<()> {
             }
         };
 
-        // Handle action (pause/cancel/retry/unpause)
+        // Handle action (pause/cancel/retry/unpause/openFile)
         if let Some(ref action) = msg.action {
+            // Handle openFile
+            if action == "openFile" {
+                if let Some(ref path) = msg.path {
+                    match open_file(path) {
+                        Ok(_) => send_response("success", "Opened", None),
+                        Err(e) => send_response("error", &format!("Open error: {}", e), None),
+                    }
+                    continue;
+                }
+            }
+
             if let Some(ref gid) = msg.gid {
                 match handle_action(action, gid).await {
                     Ok(result) => {
