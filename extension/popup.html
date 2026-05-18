@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>BR Download Manager</h1>
+    <span class="status" id="status">Connecting...</span>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="active">Active</button>
+    <button class="tab" data-tab="waiting">Waiting</button>
+    <button class="tab" data-tab="completed">Completed</button>
+  </div>
+
+  <div id="no-downloads" class="empty">
+    <div class="empty-icon">&#8615;</div>
+    <p>Tidak ada download aktif</p>
+  </div>
+
+  <div id="download-list" class="download-list"></div>
+
+  <div id="error-msg" class="error" style="display:none">
+    <p>Tidak bisa konek ke aria2. Pastikan aria2 RPC berjalan di port 6800.</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
