@@ -89,21 +89,71 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 
 // Check if a partial/failed download with same filename exists in aria2
 async function findExistingDownload(filename) {
-  try {
-    const stopped = await aria2Call('aria2.tellStopped', [0, 200]);
-    if (!stopped || !Array.isArray(stopped)) return null;
+  if (!filename || filename === 'Unknown') return null;
 
-    for (const dl of stopped) {
+  try {
+    // Search ALL states: active, waiting, stopped
+    const [active, waiting, stopped] = await Promise.all([
+      aria2Call('aria2.tellActive'),
+      aria2Call('aria2.tellWaiting', [0, 200]),
+      aria2Call('aria2.tellStopped', [0, 500])
+    ]);
+
+    const allDownloads = [
+      ...(active || []),
+      ...(waiting || []),
+      ...(stopped || [])
+    ];
+
+    // Normalize search filename for comparison
+    const searchName = filename.replace(/\\/g, '/').split('/').pop().toLowerCase();
+
+    for (const dl of allDownloads) {
+      // Skip completed downloads
+      if (dl.status === 'complete') continue;
+
       if (!dl.files) continue;
       for (const file of dl.files) {
         if (!file.path) continue;
-        const existingName = file.path.replace(/\\/g, '/').split('/').pop();
-        if (existingName === filename && dl.status === 'error') {
-          // Found a failed download with same name - return its info for resume
-          return { gid: dl.gid, path: file.path, completedLength: dl.completedLength };
+        const existingName = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
+
+        // Match by exact filename OR stem (without extension) for partial matches
+        if (existingName === searchName) {
+          console.log(`Found existing download: gid=${dl.gid} status=${dl.status} file=${existingName} completed=${dl.completedLength}`);
+          return {
+            gid: dl.gid,
+            path: file.path,
+            completedLength: dl.completedLength || '0',
+            status: dl.status
+          };
         }
       }
     }
+
+    // Also check by stem match (filename without extension) for edge cases
+    const searchStem = searchName.includes('.') ? searchName.substring(0, searchName.lastIndexOf('.')) : searchName;
+    if (searchStem.length > 3) {
+      for (const dl of allDownloads) {
+        if (dl.status === 'complete') continue;
+        if (!dl.files) continue;
+        for (const file of dl.files) {
+          if (!file.path) continue;
+          const existingName = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
+          const existingStem = existingName.includes('.') ? existingName.substring(0, existingName.lastIndexOf('.')) : existingName;
+
+          if (existingStem === searchStem && existingStem.length > 3) {
+            console.log(`Found existing download (stem match): gid=${dl.gid} status=${dl.status} file=${existingName}`);
+            return {
+              gid: dl.gid,
+              path: file.path,
+              completedLength: dl.completedLength || '0',
+              status: dl.status
+            };
+          }
+        }
+      }
+    }
+
   } catch (e) {
     console.log('findExistingDownload error:', e);
   }
@@ -182,10 +232,23 @@ async function processDownload(downloadId) {
   let isResume = false;
   const existing = await findExistingDownload(outFilename);
   if (existing) {
-    console.log(`Found existing download ${existing.gid} for ${outFilename} (${existing.completedLength} bytes) - resuming`);
+    const completedMB = Math.round((parseInt(existing.completedLength) || 0) / 1024 / 1024);
+    console.log(`Found existing download ${existing.gid} for ${outFilename} (${completedMB}MB completed, status: ${existing.status}) - resuming`);
+
     // Remove old entry so we can re-add with same path
     try { await aria2Call('aria2.removeDownloadResult', [existing.gid]); } catch (e) {}
+    try { await aria2Call('aria2.forceRemove', [existing.gid]); } catch (e) {}
+
     isResume = true;
+
+    // Notify user about resume
+    chrome.notifications.create(`resume-${downloadId}`, {
+      type: 'basic',
+      iconUrl: 'icon48.png',
+      title: 'BR Download Manager',
+      message: `Melanjutkan download: ${outFilename}\nDari ${completedMB}MB yang sudah terdownload.`,
+      priority: 2
+    });
   }
 
   console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}, resume=${isResume}`);
