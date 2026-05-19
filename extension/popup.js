@@ -105,10 +105,10 @@ function getActionButtons(dl) {
       <button class="btn btn-open" data-command="openFile" data-path="${escapeHtml(filePath)}">Open</button>
     `;
   }
+  // Error/removed: no retry button (token expired would create Unknown file)
+  // User should re-download from source, resume dialog will handle it
   if (dl.status === 'error' || dl.status === 'removed') {
-    return `
-      <button class="btn btn-retry" data-command="retry" data-gid="${gid}">Retry</button>
-    `;
+    return '';
   }
   return '';
 }
