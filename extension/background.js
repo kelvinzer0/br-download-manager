@@ -251,6 +251,44 @@ async function processDownload(downloadId) {
     });
   }
 
+  // Also check if filename itself is a numbered variant (e.g. "file (6).zip")
+  // Rust will check for .aria2 control file on disk
+  if (!isResume && /\(\d+\)\.\w+$/.test(outFilename)) {
+    isResume = true;
+    console.log(`Filename is numbered variant: ${outFilename} - marking as resume`);
+  }
+
+  // Check if base filename (without number) has numbered variants on disk
+  // by looking at aria2 stopped list for similar names
+  if (!isResume && outFilename) {
+    const stem = outFilename.includes('.') ? outFilename.substring(0, outFilename.lastIndexOf('.')) : outFilename;
+    if (stem.length > 3) {
+      try {
+        const allStopped = await aria2Call('aria2.tellStopped', [0, 500]);
+        if (allStopped) {
+          for (const dl of allStopped) {
+            if (dl.status === 'complete') continue;
+            if (!dl.files) continue;
+            for (const file of dl.files) {
+              if (!file.path) continue;
+              const existingName = file.path.replace(/\\/g, '/').split('/').pop();
+              const existingStem = existingName.includes('.') ? existingName.substring(0, existingName.lastIndexOf('.')) : existingName;
+              // Check if stem matches and has number suffix
+              if (existingStem.startsWith(stem) && /\(\d+\)$/.test(existingStem)) {
+                console.log(`Found numbered variant in aria2: ${existingName} - marking as resume`);
+                isResume = true;
+                try { await aria2Call('aria2.removeDownloadResult', [dl.gid]); } catch (e) {}
+                try { await aria2Call('aria2.forceRemove', [dl.gid]); } catch (e) {}
+                break;
+              }
+            }
+            if (isResume) break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
   console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}, resume=${isResume}`);
 
   sendToNativeHost({
