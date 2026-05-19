@@ -168,14 +168,14 @@ async function processDownload(downloadId) {
     };
 
     // Store data globally so dialog can request it via message
-    window._resumeDialogData = {
+    self._resumeDialogData = {
       failed: failedDownloads,
       newFile: outFilename || ''
     };
 
     // Also try storage as backup
     try {
-      await chrome.storage.local.set({resumeDialogData: window._resumeDialogData});
+      await chrome.storage.local.set({resumeDialogData: self._resumeDialogData});
     } catch (e) {
       console.log('Storage set failed:', e);
     }
@@ -202,7 +202,7 @@ async function processDownload(downloadId) {
 // Handle resume dialog choice
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getResumeDialogData') {
-    sendResponse(window._resumeDialogData || {failed: [], newFile: ''});
+    sendResponse(self._resumeDialogData || {failed: [], newFile: ''});
     return;
   }
 
