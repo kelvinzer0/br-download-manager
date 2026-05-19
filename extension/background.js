@@ -5,23 +5,46 @@ let tabDiscarded = false;
 // Track pending downloads waiting for filename
 let pendingDownloads = {};
 
+// Extract meaningful filename from URL, skip hash-like names
+function extractFilename(url) {
+  try {
+    const urlPath = new URL(url).pathname;
+    const segments = urlPath.split('/').filter(s => s.length > 0);
+    const last = segments[segments.length - 1] || '';
+    const name = last.split('?')[0];
+    // Skip if looks like a hash (hex string with extension)
+    if (/^[a-f0-9]{8,}(\.\w+)?$/i.test(name)) return null;
+    // Skip if too short and no extension
+    if (name.length < 3 && !name.includes('.')) return null;
+    return name || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (downloadItem.state !== 'in_progress') return;
 
   const downloadId = downloadItem.id;
   const downloadUrl = downloadItem.finalUrl || downloadItem.url;
 
-  // Get filename - might be empty at this point
+  // Try to get real filename from multiple sources
   let filename = downloadItem.filename || null;
 
-  // Extract from URL if needed
+  // Prefer original URL (before redirect) - GitHub redirects use hash filenames
   if (!filename) {
-    try {
-      const urlPath = new URL(downloadUrl).pathname;
-      const segments = urlPath.split('/').filter(s => s.length > 0);
-      const last = segments[segments.length - 1] || '';
-      filename = last.split('?')[0] || null;
-    } catch (e) {}
+    filename = extractFilename(downloadItem.url);
+  }
+
+  // Fallback to finalUrl (after redirect)
+  if (!filename) {
+    filename = extractFilename(downloadUrl);
+  }
+
+  // Check if filename looks like a hash and try to find better name
+  if (filename && /^[a-f0-9]{8,}(\.\w+)?$/i.test(filename)) {
+    const originalName = extractFilename(downloadItem.url);
+    if (originalName) filename = originalName;
   }
 
   // Store pending download info
@@ -33,15 +56,14 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     queued: Date.now()
   };
 
-  // If filename is empty, wait for it via onChanged
+  // If filename is empty or hash-like, wait for onChanged
   if (!filename || filename === 'Unknown') {
     console.log(`Waiting for filename for download ${downloadId}...`);
-    // Still try to get cookies and proceed after a short delay
     setTimeout(async () => {
       if (pendingDownloads[downloadId]) {
         await processDownload(downloadId);
       }
-    }, 1000);
+    }, 1500);
     return;
   }
 
@@ -121,10 +143,16 @@ async function processDownload(downloadId) {
   let downloadDir = pending.downloadDir || null;
 
   // If we have a full path, split it
-  if (outFilename && outFilename.includes('/') || outFilename.includes('\\')) {
+  if (outFilename && (outFilename.includes('/') || outFilename.includes('\\'))) {
     const parts = outFilename.replace(/\\/g, '/').split('/');
     outFilename = parts.pop();
     if (!downloadDir) downloadDir = parts.join('/');
+  }
+
+  // If filename is a hash, try to get a better name from original URL
+  if (outFilename && /^[a-f0-9]{8,}(\.\w+)?$/i.test(outFilename)) {
+    const originalName = extractFilename(pending.originalUrl);
+    if (originalName) outFilename = originalName;
   }
 
   console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}`);
