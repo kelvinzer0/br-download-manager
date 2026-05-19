@@ -369,32 +369,47 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
 
     // Resolve unique filename
     if let Some(filename) = msg.filename {
-        let dir = msg.dir.as_deref().unwrap_or(".");
+        // Safety: if filename is a full path, split into dir + basename
+        // This prevents aria2 from nesting paths (dir + full_path = corrupted)
+        let (actual_dir, basename) = if filename.contains('/') || filename.contains('\\') {
+            let normalized = filename.replace('\\', "/");
+            let parts: Vec<&str> = normalized.split('/').collect();
+            let name = parts.last().unwrap_or(&"").to_string();
+            let d = parts[..parts.len()-1].join("/");
+            (Some(d), name)
+        } else {
+            (None, filename.clone())
+        };
+
+        let dir = actual_dir.as_deref()
+            .or(msg.dir.as_deref())
+            .unwrap_or(".");
+
         let out_name = if msg.is_retry || msg.is_resume {
             // Resume/retry: reuse same file
-            if let Some(variant) = find_numbered_variant(dir, &filename) {
+            if let Some(variant) = find_numbered_variant(dir, &basename) {
                 options.insert("continue".to_string(), json!("true"));
                 options.insert("allow-overwrite".to_string(), json!("true"));
                 variant
             } else if msg.is_retry {
-                filename.clone()
+                basename.clone()
             } else {
                 options.insert("continue".to_string(), json!("true"));
                 options.insert("allow-overwrite".to_string(), json!("true"));
-                filename.clone()
+                basename.clone()
             }
         } else if msg.overwrite {
             // Lanjutkan: resume from checkpoint using same file + .aria2 control
             // aria2 will send HTTP Range request to continue from last byte
             options.insert("continue".to_string(), json!("true"));
             options.insert("allow-overwrite".to_string(), json!("true"));
-            filename.clone()
+            basename.clone()
         } else {
-            unique_filename(dir, &filename)
+            unique_filename(dir, &basename)
         };
         options.insert("out".to_string(), json!(out_name));
-    }
-    if let Some(dir) = msg.dir {
+        options.insert("dir".to_string(), json!(dir));
+    } else if let Some(dir) = msg.dir {
         options.insert("dir".to_string(), json!(dir));
     }
     if let Some(headers) = msg.headers {
