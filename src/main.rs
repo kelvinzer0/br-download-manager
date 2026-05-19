@@ -384,12 +384,9 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
                 filename.clone()
             }
         } else if msg.overwrite {
-            // Overwrite: delete .aria2 control file so aria2 starts fresh from 0
-            let out_path = std::path::Path::new(dir).join(&filename);
-            let control_path = std::path::Path::new(dir).join(format!("{}.aria2", filename));
-            let _ = std::fs::remove_file(&control_path);
-            // Also try to remove partial file so aria2 downloads fresh
-            let _ = std::fs::remove_file(&out_path);
+            // Lanjutkan: resume from checkpoint using same file + .aria2 control
+            // aria2 will send HTTP Range request to continue from last byte
+            options.insert("continue".to_string(), json!("true"));
             options.insert("allow-overwrite".to_string(), json!("true"));
             filename.clone()
         } else {
