@@ -58,7 +58,7 @@ function renderList(failed, newFile) {
         <div class="item-name" title="${name}">${name}</div>
         <div class="item-meta">${mb}MB / ${totalMB}MB &middot; ${dl.status}</div>
       </div>
-      <button class="btn btn-resume" data-gid="${dl.gid}">Resume</button>
+      <button class="btn btn-resume" data-gid="${dl.gid}">Lanjutkan</button>
     `;
     list.appendChild(div);
   });

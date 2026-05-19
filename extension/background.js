@@ -211,31 +211,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     resumeDialogPending = null;
 
     if (request.choice === 'resume' && request.gid) {
-      // Get the failed download's file path for resume
+      // Get the failed download's file path
       aria2Call('aria2.getFiles', [request.gid]).then(files => {
         const filePath = files && files[0] ? files[0].path : null;
 
-        // DON'T remove old entry - let it stay so dialog still shows it
-        // aria2 will handle the new download with same output file + continue=true
+        // Remove old failed entry
+        aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
 
         // Notify user
         chrome.notifications.create(`resume-${Date.now()}`, {
           type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
-          message: `Melanjutkan download...`,
+          message: `Download ulang ke file yang sama...`,
           priority: 2
         });
 
-        // Send NEW download URL (from re-download) with OLD file path (for resume)
+        // Download fresh to the same file location (no resume, start from 0)
         sendToNativeHost({
           url: pending.url,
           filename: filePath || pending.filename,
           dir: pending.dir,
           headers: pending.headers,
-          is_resume: true
+          is_resume: false
         });
       }).catch(() => {
-        // Fallback: send with pending info
-        sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: true });
+        // Fallback
+        sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: false });
       });
     } else {
       // New download - proceed normally
