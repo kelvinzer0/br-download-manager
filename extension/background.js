@@ -159,15 +159,19 @@ async function processDownload(downloadId) {
       headers
     };
 
-    const dataParam = encodeURIComponent(JSON.stringify(failedDownloads));
-    const fileParam = encodeURIComponent(outFilename || '');
-    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?data=${dataParam}&file=${fileParam}`);
-    chrome.windows.create({
-      url: dialogUrl,
-      type: 'popup',
-      width: 420,
-      height: 300,
-      focused: true
+    // Pass data via storage so dialog can read it without fetch
+    chrome.storage.local.set({resumeDialogData: {
+      failed: failedDownloads,
+      newFile: outFilename || ''
+    }}, () => {
+      const dialogUrl = chrome.runtime.getURL('resume-dialog.html');
+      chrome.windows.create({
+        url: dialogUrl,
+        type: 'popup',
+        width: 420,
+        height: 350,
+        focused: true
+      });
     });
 
     delete pendingDownloads[downloadId];

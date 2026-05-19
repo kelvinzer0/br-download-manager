@@ -8,15 +8,14 @@
       width: 400px;
       max-height: 450px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg-primary, #1a1b1e);
-      color: var(--text-primary, #e1e1e3);
+      background: #1a1b1e;
+      color: #e1e1e3;
       overflow-y: auto;
     }
     @media (prefers-color-scheme: light) {
       body { background: #fff; color: #212529; }
       .item { background: #f8f9fa; border-color: #e9ecef; }
       .item:hover { border-color: #4dabf7; }
-      .meta { color: #6c757d; }
       .btn-new { background: #e9ecef; color: #333; }
       .btn-new:hover { background: #dee2e6; }
     }
@@ -29,13 +28,20 @@
       justify-content: space-between;
       align-items: center;
     }
-    .header .count {
+    .count {
       font-size: 11px;
       background: #5c1a1a;
       color: #ff8787;
       padding: 2px 8px;
       border-radius: 10px;
     }
+    .new-info {
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #909296;
+      border-bottom: 1px solid #373a40;
+    }
+    .new-info strong { color: #e1e1e3; }
     .list { padding: 8px; }
     .item {
       background: #25262b;
@@ -103,57 +109,15 @@
     <span>Download Gagal Ditemukan</span>
     <span class="count" id="count">0</span>
   </div>
-  <div id="new-info" style="padding:8px 12px;font-size:11px;color:#909296;border-bottom:1px solid #373a40;display:none">
+  <div class="new-info" id="new-info" style="display:none">
     Download baru: <strong id="new-filename"></strong>
   </div>
-  <div class="list" id="list"></div>
+  <div class="list" id="list">
+    <div class="empty">Memuat...</div>
+  </div>
   <div class="btn-new-wrap">
     <button class="btn-new" id="skip">Download Baru (abaikan yang gagal)</button>
   </div>
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const failed = JSON.parse(decodeURIComponent(params.get('data') || '[]'));
-    const newFile = params.get('file') || '';
-    document.getElementById('count').textContent = failed.length;
-    if (newFile) {
-      document.getElementById('new-info').style.display = 'block';
-      document.getElementById('new-filename').textContent = newFile;
-    }
-
-    const list = document.getElementById('list');
-    if (failed.length === 0) {
-      list.innerHTML = '<div class="empty">Tidak ada download gagal</div>';
-    } else {
-      failed.forEach(dl => {
-        const mb = Math.round((parseInt(dl.completedLength) || 0) / 1024 / 1024);
-        const totalMB = Math.round((parseInt(dl.totalLength) || 0) / 1024 / 1024);
-        const name = dl.filename || 'Unknown';
-        const div = document.createElement('div');
-        div.className = 'item';
-        div.innerHTML = `
-          <div class="item-info">
-            <div class="item-name" title="${name}">${name}</div>
-            <div class="item-meta">${mb}MB / ${totalMB}MB &middot; ${dl.status}</div>
-          </div>
-          <button class="btn btn-resume" data-gid="${dl.gid}">Resume</button>
-        `;
-        list.appendChild(div);
-      });
-    }
-
-    // Event delegation for resume buttons
-    list.addEventListener('click', (e) => {
-      const btn = e.target.closest('.btn-resume');
-      if (!btn) return;
-      const gid = btn.dataset.gid;
-      chrome.runtime.sendMessage({action: 'resumeChoice', choice: 'resume', gid: gid});
-      window.close();
-    });
-
-    document.getElementById('skip').onclick = () => {
-      chrome.runtime.sendMessage({action: 'resumeChoice', choice: 'new'});
-      window.close();
-    };
-  </script>
+  <script src="resume-dialog.js"></script>
 </body>
 </html>
