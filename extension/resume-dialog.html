@@ -5,67 +5,143 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 350px;
+      width: 400px;
+      max-height: 450px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: var(--bg-primary, #1a1b1e);
       color: var(--text-primary, #e1e1e3);
-      padding: 20px;
+      overflow-y: auto;
     }
     @media (prefers-color-scheme: light) {
       body { background: #fff; color: #212529; }
-      .info-box { background: #f8f9fa; border-color: #e9ecef; }
-      .filename { color: #333; }
+      .item { background: #f8f9fa; border-color: #e9ecef; }
+      .item:hover { border-color: #4dabf7; }
       .meta { color: #6c757d; }
+      .btn-new { background: #e9ecef; color: #333; }
+      .btn-new:hover { background: #dee2e6; }
     }
-    h2 { font-size: 15px; margin-bottom: 12px; }
-    .info-box {
+    .header {
+      padding: 14px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      border-bottom: 1px solid #373a40;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header .count {
+      font-size: 11px;
+      background: #5c1a1a;
+      color: #ff8787;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    .list { padding: 8px; }
+    .item {
       background: #25262b;
       border: 1px solid #373a40;
       border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 16px;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.15s;
     }
-    .filename { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
-    .meta { font-size: 11px; color: #909296; }
-    .buttons { display: flex; gap: 8px; }
-    button {
-      flex: 1;
+    .item:hover { border-color: #4dabf7; }
+    .item-info { flex: 1; min-width: 0; }
+    .item-name {
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .item-meta { font-size: 10px; color: #909296; margin-top: 2px; }
+    .btn {
+      border: none;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+    .btn:active { transform: scale(0.95); }
+    .btn-resume { background: #2b8a3e; color: #fff; }
+    .btn-resume:hover { background: #37b24d; }
+    .btn-new-wrap {
+      padding: 8px;
+      border-top: 1px solid #373a40;
+    }
+    .btn-new {
+      width: 100%;
       padding: 10px;
       border: none;
       border-radius: 8px;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
+      background: #373a40;
+      color: #e1e1e3;
       transition: all 0.15s;
     }
-    button:active { transform: scale(0.97); }
-    .btn-resume { background: #2b8a3e; color: #fff; }
-    .btn-resume:hover { background: #37b24d; }
-    .btn-new { background: #373a40; color: #e1e1e3; }
     .btn-new:hover { background: #495057; }
+    .btn-new:active { transform: scale(0.98); }
+    .empty {
+      text-align: center;
+      padding: 30px;
+      color: #555;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
-  <h2>Download ditemukan</h2>
-  <div class="info-box">
-    <div class="filename" id="filename"></div>
-    <div class="meta" id="meta"></div>
+  <div class="header">
+    <span>Download Gagal Ditemukan</span>
+    <span class="count" id="count">0</span>
   </div>
-  <div class="buttons">
-    <button class="btn-resume" id="resume">Lanjutkan</button>
-    <button class="btn-new" id="new">Download Baru</button>
+  <div class="list" id="list"></div>
+  <div class="btn-new-wrap">
+    <button class="btn-new" id="skip">Download Baru (abaikan yang gagal)</button>
   </div>
   <script>
-    const params = new URLSearchParams(window.location.search);
-    document.getElementById('filename').textContent = params.get('filename') || 'Unknown';
-    const mb = params.get('mb') || '0';
-    document.getElementById('meta').textContent = `${mb}MB sudah terdownload - pilih aksi`;
+    const failed = JSON.parse(decodeURIComponent(new URLSearchParams(window.location.search).get('data') || '[]'));
+    document.getElementById('count').textContent = failed.length;
 
-    document.getElementById('resume').onclick = () => {
-      chrome.runtime.sendMessage({action: 'resumeChoice', choice: 'resume'});
+    const list = document.getElementById('list');
+    if (failed.length === 0) {
+      list.innerHTML = '<div class="empty">Tidak ada download gagal</div>';
+    } else {
+      failed.forEach(dl => {
+        const mb = Math.round((parseInt(dl.completedLength) || 0) / 1024 / 1024);
+        const totalMB = Math.round((parseInt(dl.totalLength) || 0) / 1024 / 1024);
+        const name = dl.filename || 'Unknown';
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `
+          <div class="item-info">
+            <div class="item-name" title="${name}">${name}</div>
+            <div class="item-meta">${mb}MB / ${totalMB}MB &middot; ${dl.status}</div>
+          </div>
+          <button class="btn btn-resume" data-gid="${dl.gid}">Resume</button>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    // Event delegation for resume buttons
+    list.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-resume');
+      if (!btn) return;
+      const gid = btn.dataset.gid;
+      chrome.runtime.sendMessage({action: 'resumeChoice', choice: 'resume', gid: gid});
       window.close();
-    };
-    document.getElementById('new').onclick = () => {
+    });
+
+    document.getElementById('skip').onclick = () => {
       chrome.runtime.sendMessage({action: 'resumeChoice', choice: 'new'});
       window.close();
     };

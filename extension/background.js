@@ -74,34 +74,25 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   }
 });
 
-// Check aria2 for existing failed download with same filename
-async function findExistingDownload(filename) {
-  if (!filename || filename === 'Unknown') return null;
+// Fetch ALL failed/errored downloads from aria2
+async function getAllFailedDownloads() {
   try {
-    const [active, waiting, stopped] = await Promise.all([
-      aria2Call('aria2.tellActive'),
-      aria2Call('aria2.tellWaiting', [0, 200]),
-      aria2Call('aria2.tellStopped', [0, 500])
-    ]);
-    const all = [...(active || []), ...(waiting || []), ...(stopped || [])];
-    const search = filename.replace(/\\/g, '/').split('/').pop().toLowerCase();
-
-    for (const dl of all) {
-      if (dl.status === 'complete') continue;
-      if (!dl.files) continue;
-      for (const file of dl.files) {
-        if (!file.path) continue;
-        const name = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
-        if (name === search || (name.includes('.') && search.includes('.') &&
-            name.substring(0, name.lastIndexOf('.')) === search.substring(0, search.lastIndexOf('.')))) {
-          return { gid: dl.gid, path: file.path, completedLength: dl.completedLength || '0', status: dl.status };
-        }
-      }
-    }
+    const stopped = await aria2Call('aria2.tellStopped', [0, 500]);
+    if (!stopped) return [];
+    return stopped.filter(dl => dl.status === 'error' || dl.status === 'removed').map(dl => {
+      const filename = dl.files && dl.files[0] ? (dl.files[0].path || '').replace(/\\/g, '/').split('/').pop() : 'Unknown';
+      return {
+        gid: dl.gid,
+        filename: filename,
+        completedLength: dl.completedLength || '0',
+        totalLength: dl.totalLength || '0',
+        status: dl.status
+      };
+    });
   } catch (e) {
-    console.log('findExistingDownload error:', e);
+    console.log('getAllFailedDownloads error:', e);
+    return [];
   }
-  return null;
 }
 
 async function processDownload(downloadId) {
@@ -153,30 +144,28 @@ async function processDownload(downloadId) {
     if (originalName) outFilename = originalName;
   }
 
-  // Check for existing failed download
-  const existing = await findExistingDownload(outFilename);
-  if (existing) {
-    // Show resume dialog - let user choose
-    const completedMB = Math.round((parseInt(existing.completedLength) || 0) / 1024 / 1024);
-    console.log(`Found existing download: ${outFilename} (${completedMB}MB) - showing dialog`);
+  // Check for ANY failed downloads in aria2
+  const failedDownloads = await getAllFailedDownloads();
+
+  if (failedDownloads.length > 0) {
+    // Show dialog with ALL failed downloads
+    console.log(`Found ${failedDownloads.length} failed downloads - showing dialog`);
 
     resumeDialogPending = {
       downloadId,
       url: downloadUrl,
       filename: outFilename,
       dir: downloadDir,
-      headers,
-      existingGid: existing.gid,
-      completedMB
+      headers
     };
 
-    // Show popup dialog
-    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?filename=${encodeURIComponent(outFilename)}&mb=${completedMB}`);
+    const dataParam = encodeURIComponent(JSON.stringify(failedDownloads));
+    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?data=${dataParam}`);
     chrome.windows.create({
       url: dialogUrl,
       type: 'popup',
-      width: 380,
-      height: 180,
+      width: 420,
+      height: 300,
       focused: true
     });
 
@@ -184,7 +173,7 @@ async function processDownload(downloadId) {
     return;
   }
 
-  // No existing download - send directly
+  // No failed downloads - send directly
   console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}`);
   sendToNativeHost({ url: downloadUrl, filename: outFilename, dir: downloadDir, headers, is_resume: false });
   delete pendingDownloads[downloadId];
@@ -196,29 +185,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const pending = resumeDialogPending;
     resumeDialogPending = null;
 
-    if (request.choice === 'resume') {
-      // Remove old entry, resume with same file
-      aria2Call('aria2.removeDownloadResult', [pending.existingGid]).catch(() => {});
-      aria2Call('aria2.forceRemove', [pending.existingGid]).catch(() => {});
+    if (request.choice === 'resume' && request.gid) {
+      // Get the failed download's file info for resume
+      aria2Call('aria2.getFiles', [request.gid]).then(files => {
+        const filePath = files && files[0] ? files[0].path : null;
 
-      chrome.notifications.create(`resume-${pending.downloadId}`, {
-        type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
-        message: `Melanjutkan download: ${pending.filename}\nDari ${pending.completedMB}MB.`,
-        priority: 2
+        // Remove old entry
+        aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
+        aria2Call('aria2.forceRemove', [request.gid]).catch(() => {});
+
+        sendToNativeHost({
+          url: pending.url,
+          filename: filePath || pending.filename,
+          dir: pending.dir,
+          headers: pending.headers,
+          is_resume: true
+        });
+      }).catch(() => {
+        // Fallback: just send with resume flag
+        aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
+        sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: true });
       });
-
-      sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: true });
     } else {
-      // New download - delete old files, start fresh
-      aria2Call('aria2.removeDownloadResult', [pending.existingGid]).catch(() => {});
-      aria2Call('aria2.forceRemove', [pending.existingGid]).catch(() => {});
-
-      chrome.notifications.create(`new-${pending.downloadId}`, {
-        type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
-        message: `Download baru: ${pending.filename}`,
-        priority: 2
-      });
-
+      // New download - proceed normally
       sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: false });
     }
     return;
