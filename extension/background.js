@@ -218,18 +218,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Remove old failed entry
         aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
 
+        // Split full path into dir + filename for aria2
+        let resumeFilename = pending.filename;
+        let resumeDir = pending.dir;
+        if (filePath) {
+          const parts = filePath.replace(/\\/g, '/').split('/');
+          resumeFilename = parts.pop();
+          resumeDir = parts.join('/') || pending.dir;
+        }
+
         // Notify user
         chrome.notifications.create(`resume-${Date.now()}`, {
           type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
-          message: `Download ulang ke file yang sama...`,
+          message: `Melanjutkan download dari checkpoint...`,
           priority: 2
         });
 
-        // Download fresh to the same file location (aria2 will overwrite existing partial)
+        // Resume from checkpoint: aria2 will read .aria2 control file + send HTTP Range
         sendToNativeHost({
           url: pending.url,
-          filename: filePath || pending.filename,
-          dir: pending.dir,
+          filename: resumeFilename,
+          dir: resumeDir,
           headers: pending.headers,
           is_resume: false,
           overwrite: true
