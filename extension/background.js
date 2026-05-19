@@ -211,14 +211,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     resumeDialogPending = null;
 
     if (request.choice === 'resume' && request.gid) {
-      // Get the failed download's file info for resume
+      // Get the failed download's file path for resume
       aria2Call('aria2.getFiles', [request.gid]).then(files => {
         const filePath = files && files[0] ? files[0].path : null;
 
-        // Remove old entry
-        aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
-        aria2Call('aria2.forceRemove', [request.gid]).catch(() => {});
+        // DON'T remove old entry - let it stay so dialog still shows it
+        // aria2 will handle the new download with same output file + continue=true
 
+        // Notify user
+        chrome.notifications.create(`resume-${Date.now()}`, {
+          type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
+          message: `Melanjutkan download...`,
+          priority: 2
+        });
+
+        // Send NEW download URL (from re-download) with OLD file path (for resume)
         sendToNativeHost({
           url: pending.url,
           filename: filePath || pending.filename,
@@ -227,8 +234,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           is_resume: true
         });
       }).catch(() => {
-        // Fallback: just send with resume flag
-        aria2Call('aria2.removeDownloadResult', [request.gid]).catch(() => {});
+        // Fallback: send with pending info
         sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: true });
       });
     } else {
