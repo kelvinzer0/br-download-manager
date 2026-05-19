@@ -103,13 +103,22 @@
     <span>Download Gagal Ditemukan</span>
     <span class="count" id="count">0</span>
   </div>
+  <div id="new-info" style="padding:8px 12px;font-size:11px;color:#909296;border-bottom:1px solid #373a40;display:none">
+    Download baru: <strong id="new-filename"></strong>
+  </div>
   <div class="list" id="list"></div>
   <div class="btn-new-wrap">
     <button class="btn-new" id="skip">Download Baru (abaikan yang gagal)</button>
   </div>
   <script>
-    const failed = JSON.parse(decodeURIComponent(new URLSearchParams(window.location.search).get('data') || '[]'));
+    const params = new URLSearchParams(window.location.search);
+    const failed = JSON.parse(decodeURIComponent(params.get('data') || '[]'));
+    const newFile = params.get('file') || '';
     document.getElementById('count').textContent = failed.length;
+    if (newFile) {
+      document.getElementById('new-info').style.display = 'block';
+      document.getElementById('new-filename').textContent = newFile;
+    }
 
     const list = document.getElementById('list');
     if (failed.length === 0) {

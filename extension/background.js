@@ -160,7 +160,8 @@ async function processDownload(downloadId) {
     };
 
     const dataParam = encodeURIComponent(JSON.stringify(failedDownloads));
-    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?data=${dataParam}`);
+    const fileParam = encodeURIComponent(outFilename || '');
+    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?data=${dataParam}&file=${fileParam}`);
     chrome.windows.create({
       url: dialogUrl,
       type: 'popup',
