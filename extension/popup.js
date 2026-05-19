@@ -117,7 +117,11 @@ function renderDownloadItem(dl) {
   const total = parseInt(dl.totalLength) || 0;
   const completed = parseInt(dl.completedLength) || 0;
   const speed = parseInt(dl.downloadSpeed) || 0;
-  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const rawPercent = total > 0 ? (completed / total) * 100 : 0;
+  // Show 1 decimal when >99% to avoid showing "100%" for incomplete downloads
+  const percent = rawPercent >= 99 && rawPercent < 100
+    ? rawPercent.toFixed(1)
+    : Math.round(rawPercent);
   const filename = getFilename(dl);
 
   return `
