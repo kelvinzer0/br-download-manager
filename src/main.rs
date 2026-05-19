@@ -299,12 +299,41 @@ fn open_file(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Generate unique filename if file already exists
+/// file.zip -> file (1).zip -> file (2).zip
+fn unique_filename(dir: &str, filename: &str) -> String {
+    let path = std::path::Path::new(dir).join(filename);
+    if !path.exists() {
+        return filename.to_string();
+    }
+
+    let (stem, ext) = if let Some(dot_pos) = filename.rfind('.') {
+        (&filename[..dot_pos], &filename[dot_pos..])
+    } else {
+        (filename, "")
+    };
+
+    for i in 1..1000 {
+        let new_name = format!("{} ({}){}", stem, i, ext);
+        let new_path = std::path::Path::new(dir).join(&new_name);
+        if !new_path.exists() {
+            return new_name;
+        }
+    }
+
+    filename.to_string()
+}
+
 async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error::Error>> {
     ensure_aria2_running().await;
 
     let mut options = serde_json::Map::new();
+
+    // Resolve unique filename to prevent overwrite
     if let Some(filename) = msg.filename {
-        options.insert("out".to_string(), json!(filename));
+        let dir = msg.dir.as_deref().unwrap_or(".");
+        let unique = unique_filename(dir, &filename);
+        options.insert("out".to_string(), json!(unique));
     }
     if let Some(dir) = msg.dir {
         options.insert("dir".to_string(), json!(dir));
