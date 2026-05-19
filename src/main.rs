@@ -303,6 +303,38 @@ fn open_file(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Check if a partial .aria2 control file exists for a given file
+/// aria2 creates file.aria2 control files for partial downloads
+fn has_aria2_control_file(dir: &str, filename: &str) -> bool {
+    let path = std::path::Path::new(dir).join(format!("{}.aria2", filename));
+    path.exists()
+}
+
+/// Find existing numbered variant on disk: file (1).zip, file (2).zip, etc.
+/// Returns the variant name if found and has a partial .aria2 control file
+fn find_numbered_variant(dir: &str, filename: &str) -> Option<String> {
+    let (stem, ext) = if let Some(dot_pos) = filename.rfind('.') {
+        (&filename[..dot_pos], &filename[dot_pos..])
+    } else {
+        (filename, "")
+    };
+
+    // Check the base file first
+    if has_aria2_control_file(dir, filename) {
+        return Some(filename.to_string());
+    }
+
+    // Check numbered variants: (1), (2), ... (999)
+    for i in 1..1000 {
+        let variant = format!("{} ({}){}", stem, i, ext);
+        if has_aria2_control_file(dir, &variant) {
+            return Some(variant);
+        }
+    }
+
+    None
+}
+
 /// Generate unique filename if file already exists
 /// file.zip -> file (1).zip -> file (2).zip
 fn unique_filename(dir: &str, filename: &str) -> String {
@@ -337,12 +369,21 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
     if let Some(filename) = msg.filename {
         let dir = msg.dir.as_deref().unwrap_or(".");
         let out_name = if msg.is_retry || msg.is_resume {
-            // Resume: reuse same file, aria2 continues via .aria2 control file
-            if msg.is_resume {
+            // Resume: find the actual numbered variant on disk
+            // e.g. user has "file (6).zip" with .aria2 control file
+            if let Some(variant) = find_numbered_variant(dir, &filename) {
                 options.insert("continue".to_string(), json!("true"));
                 options.insert("allow-overwrite".to_string(), json!("true"));
+                variant
+            } else if msg.is_retry {
+                // Retry but no control file found - still reuse same name
+                filename.clone()
+            } else {
+                // is_resume but no control file - treat as resume anyway
+                options.insert("continue".to_string(), json!("true"));
+                options.insert("allow-overwrite".to_string(), json!("true"));
+                filename.clone()
             }
-            filename.clone()
         } else {
             unique_filename(dir, &filename)
         };
