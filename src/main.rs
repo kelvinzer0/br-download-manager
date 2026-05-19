@@ -15,6 +15,8 @@ struct DownloadMessage {
     action: Option<String>,
     gid: Option<String>,
     path: Option<String>,
+    #[serde(default)]
+    is_retry: bool,
 }
 
 #[derive(Serialize)]
@@ -329,11 +331,15 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
 
     let mut options = serde_json::Map::new();
 
-    // Resolve unique filename to prevent overwrite
+    // Resolve unique filename - skip for retries (reuse same file, aria2 resumes via .aria2 control)
     if let Some(filename) = msg.filename {
         let dir = msg.dir.as_deref().unwrap_or(".");
-        let unique = unique_filename(dir, &filename);
-        options.insert("out".to_string(), json!(unique));
+        let out_name = if msg.is_retry {
+            filename.clone()
+        } else {
+            unique_filename(dir, &filename)
+        };
+        options.insert("out".to_string(), json!(out_name));
     }
     if let Some(dir) = msg.dir {
         options.insert("dir".to_string(), json!(dir));
@@ -370,25 +376,45 @@ async fn handle_action(action: &str, gid: &str) -> Result<String, Box<dyn std::e
             Ok("Cancelled".to_string())
         }
         "retry" => {
+            // Get original download info: URL + file path
             let info = aria2_call("aria2.getFiles", json!([gid])).await?;
-            let url = if let Some(files) = info.as_array() {
+            let mut url = String::new();
+            let mut out_path = String::new();
+
+            if let Some(files) = info.as_array() {
                 if let Some(file) = files.first() {
+                    // Get URL
                     if let Some(uris) = file.get("uris") {
                         if let Some(uri_arr) = uris.as_array() {
                             if let Some(uri) = uri_arr.first() {
-                                uri.get("uri").and_then(|u| u.as_str()).unwrap_or("")
-                            } else { "" }
-                        } else { "" }
-                    } else { "" }
-                } else { "" }
-            } else { "" };
+                                url = uri.get("uri").and_then(|u| u.as_str()).unwrap_or("").to_string();
+                            }
+                        }
+                    }
+                    // Get original file path for resume
+                    if let Some(path) = file.get("path").and_then(|p| p.as_str()) {
+                        out_path = path.to_string();
+                    }
+                }
+            }
 
             if url.is_empty() {
                 return Err("Cannot find original URL for retry".into());
             }
 
+            // Remove old result but keep the partial file on disk
             let _ = aria2_call("aria2.removeDownloadResult", json!([gid])).await;
-            let new_gid = aria2_call("aria2.addUri", json!([[url]])).await?;
+
+            // Re-add with same output path so aria2 can resume via .aria2 control file
+            let mut options = serde_json::Map::new();
+            if !out_path.is_empty() {
+                options.insert("out".to_string(), json!(out_path));
+            }
+            // Force continue/resume
+            options.insert("continue".to_string(), json!("true"));
+            options.insert("allow-overwrite".to_string(), json!("true"));
+
+            let new_gid = aria2_call("aria2.addUri", json!([[url], options])).await?;
             Ok(new_gid.as_str().unwrap_or("").to_string())
         }
         _ => Err(format!("Unknown action: {}", action).into())
