@@ -225,13 +225,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           priority: 2
         });
 
-        // Download fresh to the same file location (no resume, start from 0)
+        // Download fresh to the same file location (aria2 will overwrite existing partial)
         sendToNativeHost({
           url: pending.url,
           filename: filePath || pending.filename,
           dir: pending.dir,
           headers: pending.headers,
-          is_resume: false
+          is_resume: false,
+          overwrite: true
         });
       }).catch(() => {
         // Fallback

@@ -19,6 +19,8 @@ struct DownloadMessage {
     is_retry: bool,
     #[serde(default)]
     is_resume: bool,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 #[derive(Serialize)]
@@ -365,25 +367,26 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
 
     let mut options = serde_json::Map::new();
 
-    // Resolve unique filename - skip for retries/resumes (reuse same file)
+    // Resolve unique filename
     if let Some(filename) = msg.filename {
         let dir = msg.dir.as_deref().unwrap_or(".");
         let out_name = if msg.is_retry || msg.is_resume {
-            // Resume: find the actual numbered variant on disk
-            // e.g. user has "file (6).zip" with .aria2 control file
+            // Resume/retry: reuse same file
             if let Some(variant) = find_numbered_variant(dir, &filename) {
                 options.insert("continue".to_string(), json!("true"));
                 options.insert("allow-overwrite".to_string(), json!("true"));
                 variant
             } else if msg.is_retry {
-                // Retry but no control file found - still reuse same name
                 filename.clone()
             } else {
-                // is_resume but no control file - treat as resume anyway
                 options.insert("continue".to_string(), json!("true"));
                 options.insert("allow-overwrite".to_string(), json!("true"));
                 filename.clone()
             }
+        } else if msg.overwrite {
+            // Overwrite: use same filename, aria2 will overwrite existing file
+            options.insert("allow-overwrite".to_string(), json!("true"));
+            filename.clone()
         } else {
             unique_filename(dir, &filename)
         };
