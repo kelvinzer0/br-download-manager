@@ -78,19 +78,26 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 async function getAllFailedDownloads() {
   try {
     const stopped = await aria2Call('aria2.tellStopped', [0, 500]);
-    if (!stopped) return [];
-    return stopped.filter(dl => dl.status === 'error' || dl.status === 'removed').map(dl => {
-      const filename = dl.files && dl.files[0] ? (dl.files[0].path || '').replace(/\\/g, '/').split('/').pop() : 'Unknown';
+    console.log('aria2 tellStopped response:', stopped);
+    if (!stopped || !Array.isArray(stopped)) {
+      console.log('No stopped downloads or invalid response');
+      return [];
+    }
+    const failed = stopped.filter(dl => dl.status === 'error' || dl.status === 'removed');
+    console.log(`Found ${failed.length} failed/removed downloads out of ${stopped.length} stopped`);
+    return failed.map(dl => {
+      const path = dl.files && dl.files[0] ? (dl.files[0].path || '') : '';
+      const filename = path ? path.replace(/\\/g, '/').split('/').pop() : 'Unknown';
       return {
         gid: dl.gid,
-        filename: filename,
+        filename: filename || 'Unknown',
         completedLength: dl.completedLength || '0',
         totalLength: dl.totalLength || '0',
         status: dl.status
       };
     });
   } catch (e) {
-    console.log('getAllFailedDownloads error:', e);
+    console.error('getAllFailedDownloads error:', e);
     return [];
   }
 }
