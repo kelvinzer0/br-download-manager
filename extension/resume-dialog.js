@@ -1,9 +1,38 @@
-// Read data from storage (set by background.js)
-chrome.storage.local.get('resumeDialogData', (data) => {
-  const info = data.resumeDialogData || {failed: [], newFile: ''};
-  const failed = info.failed || [];
-  const newFile = info.newFile || '';
+// Request data from background script
+async function loadData() {
+  let failed = [];
+  let newFile = '';
 
+  // Try message first (most reliable)
+  try {
+    const data = await chrome.runtime.sendMessage({action: 'getResumeDialogData'});
+    if (data && data.failed) {
+      failed = data.failed;
+      newFile = data.newFile || '';
+      console.log(`Got ${failed.length} items via message`);
+    }
+  } catch (e) {
+    console.log('Message request failed:', e);
+  }
+
+  // Fallback to storage
+  if (failed.length === 0) {
+    try {
+      const data = await chrome.storage.local.get('resumeDialogData');
+      if (data.resumeDialogData) {
+        failed = data.resumeDialogData.failed || [];
+        newFile = data.resumeDialogData.newFile || '';
+        console.log(`Got ${failed.length} items from storage`);
+      }
+    } catch (e) {
+      console.log('Storage read failed:', e);
+    }
+  }
+
+  renderList(failed, newFile);
+}
+
+function renderList(failed, newFile) {
   document.getElementById('count').textContent = failed.length;
 
   if (newFile) {
@@ -34,9 +63,11 @@ chrome.storage.local.get('resumeDialogData', (data) => {
     list.appendChild(div);
   });
 
-  // Cleanup storage after reading
+  // Cleanup
   chrome.storage.local.remove('resumeDialogData');
-});
+}
+
+loadData();
 
 // Event delegation for resume buttons
 document.getElementById('list').addEventListener('click', (e) => {

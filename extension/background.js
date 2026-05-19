@@ -153,6 +153,7 @@ async function processDownload(downloadId) {
 
   // Check for ANY failed downloads in aria2
   const failedDownloads = await getAllFailedDownloads();
+  console.log(`getAllFailedDownloads returned: ${failedDownloads.length} items`);
 
   if (failedDownloads.length > 0) {
     // Show dialog with ALL failed downloads
@@ -166,19 +167,26 @@ async function processDownload(downloadId) {
       headers
     };
 
-    // Pass data via storage so dialog can read it without fetch
-    chrome.storage.local.set({resumeDialogData: {
+    // Store data globally so dialog can request it via message
+    window._resumeDialogData = {
       failed: failedDownloads,
       newFile: outFilename || ''
-    }}, () => {
-      const dialogUrl = chrome.runtime.getURL('resume-dialog.html');
-      chrome.windows.create({
-        url: dialogUrl,
-        type: 'popup',
-        width: 420,
-        height: 350,
-        focused: true
-      });
+    };
+
+    // Also try storage as backup
+    try {
+      await chrome.storage.local.set({resumeDialogData: window._resumeDialogData});
+    } catch (e) {
+      console.log('Storage set failed:', e);
+    }
+
+    const dialogUrl = chrome.runtime.getURL('resume-dialog.html');
+    chrome.windows.create({
+      url: dialogUrl,
+      type: 'popup',
+      width: 420,
+      height: 350,
+      focused: true
     });
 
     delete pendingDownloads[downloadId];
@@ -193,6 +201,11 @@ async function processDownload(downloadId) {
 
 // Handle resume dialog choice
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'getResumeDialogData') {
+    sendResponse(window._resumeDialogData || {failed: [], newFile: ''});
+    return;
+  }
+
   if (request.action === 'resumeChoice' && resumeDialogPending) {
     const pending = resumeDialogPending;
     resumeDialogPending = null;
