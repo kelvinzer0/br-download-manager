@@ -4,6 +4,8 @@ let discardedTabIds = [];
 let tabDiscarded = false;
 // Track pending downloads waiting for filename
 let pendingDownloads = {};
+// Resume dialog state
+let resumeDialogPending = null;
 
 // Extract meaningful filename from URL, skip hash-like names
 function extractFilename(url) {
@@ -12,9 +14,7 @@ function extractFilename(url) {
     const segments = urlPath.split('/').filter(s => s.length > 0);
     const last = segments[segments.length - 1] || '';
     const name = last.split('?')[0];
-    // Skip if looks like a hash (hex string with extension)
     if (/^[a-f0-9]{8,}(\.\w+)?$/i.test(name)) return null;
-    // Skip if too short and no extension
     if (name.length < 3 && !name.includes('.')) return null;
     return name || null;
   } catch (e) {
@@ -30,24 +30,13 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
   // Try to get real filename from multiple sources
   let filename = downloadItem.filename || null;
-
-  // Prefer original URL (before redirect) - GitHub redirects use hash filenames
-  if (!filename) {
-    filename = extractFilename(downloadItem.url);
-  }
-
-  // Fallback to finalUrl (after redirect)
-  if (!filename) {
-    filename = extractFilename(downloadUrl);
-  }
-
-  // Check if filename looks like a hash and try to find better name
+  if (!filename) filename = extractFilename(downloadItem.url);
+  if (!filename) filename = extractFilename(downloadUrl);
   if (filename && /^[a-f0-9]{8,}(\.\w+)?$/i.test(filename)) {
     const originalName = extractFilename(downloadItem.url);
     if (originalName) filename = originalName;
   }
 
-  // Store pending download info
   pendingDownloads[downloadId] = {
     url: downloadUrl,
     originalUrl: downloadItem.url,
@@ -56,7 +45,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     queued: Date.now()
   };
 
-  // If filename is empty or hash-like, wait for onChanged
+  // If filename is empty, wait for onChanged
   if (!filename || filename === 'Unknown') {
     console.log(`Waiting for filename for download ${downloadId}...`);
     setTimeout(async () => {
@@ -75,85 +64,40 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (delta.filename && delta.filename.current) {
     const downloadId = delta.id;
     if (pendingDownloads[downloadId]) {
-      // Chrome sets full path, extract just the filename
       const fullPath = delta.filename.current;
       const parts = fullPath.replace(/\\/g, '/').split('/');
       pendingDownloads[downloadId].filename = parts.pop();
       pendingDownloads[downloadId].downloadDir = parts.join('/');
-
       console.log(`Filename resolved: ${pendingDownloads[downloadId].filename}`);
       await processDownload(downloadId);
     }
   }
 });
 
-// Check if a partial/failed download with same filename exists in aria2
+// Check aria2 for existing failed download with same filename
 async function findExistingDownload(filename) {
   if (!filename || filename === 'Unknown') return null;
-
   try {
-    // Search ALL states: active, waiting, stopped
     const [active, waiting, stopped] = await Promise.all([
       aria2Call('aria2.tellActive'),
       aria2Call('aria2.tellWaiting', [0, 200]),
       aria2Call('aria2.tellStopped', [0, 500])
     ]);
+    const all = [...(active || []), ...(waiting || []), ...(stopped || [])];
+    const search = filename.replace(/\\/g, '/').split('/').pop().toLowerCase();
 
-    const allDownloads = [
-      ...(active || []),
-      ...(waiting || []),
-      ...(stopped || [])
-    ];
-
-    // Normalize search filename for comparison
-    const searchName = filename.replace(/\\/g, '/').split('/').pop().toLowerCase();
-
-    for (const dl of allDownloads) {
-      // Skip completed downloads
+    for (const dl of all) {
       if (dl.status === 'complete') continue;
-
       if (!dl.files) continue;
       for (const file of dl.files) {
         if (!file.path) continue;
-        const existingName = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
-
-        // Match by exact filename OR stem (without extension) for partial matches
-        if (existingName === searchName) {
-          console.log(`Found existing download: gid=${dl.gid} status=${dl.status} file=${existingName} completed=${dl.completedLength}`);
-          return {
-            gid: dl.gid,
-            path: file.path,
-            completedLength: dl.completedLength || '0',
-            status: dl.status
-          };
+        const name = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
+        if (name === search || (name.includes('.') && search.includes('.') &&
+            name.substring(0, name.lastIndexOf('.')) === search.substring(0, search.lastIndexOf('.')))) {
+          return { gid: dl.gid, path: file.path, completedLength: dl.completedLength || '0', status: dl.status };
         }
       }
     }
-
-    // Also check by stem match (filename without extension) for edge cases
-    const searchStem = searchName.includes('.') ? searchName.substring(0, searchName.lastIndexOf('.')) : searchName;
-    if (searchStem.length > 3) {
-      for (const dl of allDownloads) {
-        if (dl.status === 'complete') continue;
-        if (!dl.files) continue;
-        for (const file of dl.files) {
-          if (!file.path) continue;
-          const existingName = file.path.replace(/\\/g, '/').split('/').pop().toLowerCase();
-          const existingStem = existingName.includes('.') ? existingName.substring(0, existingName.lastIndexOf('.')) : existingName;
-
-          if (existingStem === searchStem && existingStem.length > 3) {
-            console.log(`Found existing download (stem match): gid=${dl.gid} status=${dl.status} file=${existingName}`);
-            return {
-              gid: dl.gid,
-              path: file.path,
-              completedLength: dl.completedLength || '0',
-              status: dl.status
-            };
-          }
-        }
-      }
-    }
-
   } catch (e) {
     console.log('findExistingDownload error:', e);
   }
@@ -168,22 +112,10 @@ async function processDownload(downloadId) {
   try {
     await chrome.downloads.cancel(downloadId);
     await chrome.downloads.erase({id: downloadId});
-  } catch (e) {
-    // Download might already be cancelled
-  }
+  } catch (e) {}
 
   const filename = pending.filename || 'Unknown';
   const downloadUrl = pending.url;
-
-  // Notification
-  chrome.notifications.create(`dl-${downloadId}`, {
-    type: 'basic',
-    iconUrl: 'icon48.png',
-    title: 'BR Download Manager',
-    message: `Download dimulai: ${filename}\nDisarankan tunggu download selesai sebelum browsing lagi ya!`,
-    priority: 2,
-    requireInteraction: true
-  });
 
   // Build headers
   const headers = {
@@ -191,17 +123,14 @@ async function processDownload(downloadId) {
     "Referer": pending.referrer
   };
 
-  // Fetch cookies for download URL
+  // Fetch cookies
   try {
     const cookies = await chrome.cookies.getAll({url: downloadUrl});
     if (cookies.length > 0) {
       headers["Cookie"] = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     }
-  } catch (e) {
-    console.log("Cookie fetch error:", e);
-  }
+  } catch (e) {}
 
-  // Also try original URL cookies if different (redirect case)
   if (pending.originalUrl && pending.originalUrl !== downloadUrl) {
     try {
       const origCookies = await chrome.cookies.getAll({url: pending.originalUrl});
@@ -211,102 +140,123 @@ async function processDownload(downloadId) {
     } catch (e) {}
   }
 
-  // Build out filename (just the name, not full path)
+  // Extract filename and dir
   let outFilename = filename;
   let downloadDir = pending.downloadDir || null;
-
-  // If we have a full path, split it
   if (outFilename && (outFilename.includes('/') || outFilename.includes('\\'))) {
     const parts = outFilename.replace(/\\/g, '/').split('/');
     outFilename = parts.pop();
     if (!downloadDir) downloadDir = parts.join('/');
   }
-
-  // If filename is a hash, try to get a better name from original URL
   if (outFilename && /^[a-f0-9]{8,}(\.\w+)?$/i.test(outFilename)) {
     const originalName = extractFilename(pending.originalUrl);
     if (originalName) outFilename = originalName;
   }
 
-  // Check aria2 for existing partial download with same filename
-  let isResume = false;
+  // Check for existing failed download
   const existing = await findExistingDownload(outFilename);
   if (existing) {
+    // Show resume dialog - let user choose
     const completedMB = Math.round((parseInt(existing.completedLength) || 0) / 1024 / 1024);
-    console.log(`Found existing download ${existing.gid} for ${outFilename} (${completedMB}MB completed, status: ${existing.status}) - resuming`);
+    console.log(`Found existing download: ${outFilename} (${completedMB}MB) - showing dialog`);
 
-    // Remove old entry so we can re-add with same path
-    try { await aria2Call('aria2.removeDownloadResult', [existing.gid]); } catch (e) {}
-    try { await aria2Call('aria2.forceRemove', [existing.gid]); } catch (e) {}
+    resumeDialogPending = {
+      downloadId,
+      url: downloadUrl,
+      filename: outFilename,
+      dir: downloadDir,
+      headers,
+      existingGid: existing.gid,
+      completedMB
+    };
 
-    isResume = true;
-
-    // Notify user about resume
-    chrome.notifications.create(`resume-${downloadId}`, {
-      type: 'basic',
-      iconUrl: 'icon48.png',
-      title: 'BR Download Manager',
-      message: `Melanjutkan download: ${outFilename}\nDari ${completedMB}MB yang sudah terdownload.`,
-      priority: 2
+    // Show popup dialog
+    const dialogUrl = chrome.runtime.getURL(`resume-dialog.html?filename=${encodeURIComponent(outFilename)}&mb=${completedMB}`);
+    chrome.windows.create({
+      url: dialogUrl,
+      type: 'popup',
+      width: 380,
+      height: 180,
+      focused: true
     });
+
+    delete pendingDownloads[downloadId];
+    return;
   }
 
-  // Also check if filename itself is a numbered variant (e.g. "file (6).zip")
-  // Rust will check for .aria2 control file on disk
-  if (!isResume && /\(\d+\)\.\w+$/.test(outFilename)) {
-    isResume = true;
-    console.log(`Filename is numbered variant: ${outFilename} - marking as resume`);
-  }
-
-  // Check if base filename (without number) has numbered variants on disk
-  // by looking at aria2 stopped list for similar names
-  if (!isResume && outFilename) {
-    const stem = outFilename.includes('.') ? outFilename.substring(0, outFilename.lastIndexOf('.')) : outFilename;
-    if (stem.length > 3) {
-      try {
-        const allStopped = await aria2Call('aria2.tellStopped', [0, 500]);
-        if (allStopped) {
-          for (const dl of allStopped) {
-            if (dl.status === 'complete') continue;
-            if (!dl.files) continue;
-            for (const file of dl.files) {
-              if (!file.path) continue;
-              const existingName = file.path.replace(/\\/g, '/').split('/').pop();
-              const existingStem = existingName.includes('.') ? existingName.substring(0, existingName.lastIndexOf('.')) : existingName;
-              // Check if stem matches and has number suffix
-              if (existingStem.startsWith(stem) && /\(\d+\)$/.test(existingStem)) {
-                console.log(`Found numbered variant in aria2: ${existingName} - marking as resume`);
-                isResume = true;
-                try { await aria2Call('aria2.removeDownloadResult', [dl.gid]); } catch (e) {}
-                try { await aria2Call('aria2.forceRemove', [dl.gid]); } catch (e) {}
-                break;
-              }
-            }
-            if (isResume) break;
-          }
-        }
-      } catch (e) {}
-    }
-  }
-
-  console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}, resume=${isResume}`);
-
-  sendToNativeHost({
-    url: downloadUrl,
-    filename: outFilename,
-    dir: downloadDir,
-    headers: headers,
-    is_resume: isResume
-  });
-
-  // Cleanup
+  // No existing download - send directly
+  console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}`);
+  sendToNativeHost({ url: downloadUrl, filename: outFilename, dir: downloadDir, headers, is_resume: false });
   delete pendingDownloads[downloadId];
 }
 
-// Send message to native host and handle response
+// Handle resume dialog choice
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'resumeChoice' && resumeDialogPending) {
+    const pending = resumeDialogPending;
+    resumeDialogPending = null;
+
+    if (request.choice === 'resume') {
+      // Remove old entry, resume with same file
+      aria2Call('aria2.removeDownloadResult', [pending.existingGid]).catch(() => {});
+      aria2Call('aria2.forceRemove', [pending.existingGid]).catch(() => {});
+
+      chrome.notifications.create(`resume-${pending.downloadId}`, {
+        type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
+        message: `Melanjutkan download: ${pending.filename}\nDari ${pending.completedMB}MB.`,
+        priority: 2
+      });
+
+      sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: true });
+    } else {
+      // New download - delete old files, start fresh
+      aria2Call('aria2.removeDownloadResult', [pending.existingGid]).catch(() => {});
+      aria2Call('aria2.forceRemove', [pending.existingGid]).catch(() => {});
+
+      chrome.notifications.create(`new-${pending.downloadId}`, {
+        type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
+        message: `Download baru: ${pending.filename}`,
+        priority: 2
+      });
+
+      sendToNativeHost({ url: pending.url, filename: pending.filename, dir: pending.dir, headers: pending.headers, is_resume: false });
+    }
+    return;
+  }
+
+  if (request.action === 'getDownloads') {
+    fetchAria2Status().then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'openFile') {
+    const port = chrome.runtime.connectNative('com.br.download.manager');
+    port.onMessage.addListener((response) => { sendResponse(response); port.disconnect(); });
+    port.onDisconnect.addListener(() => {
+      if (chrome.runtime.lastError) sendResponse({status: 'error', message: chrome.runtime.lastError.message});
+    });
+    port.postMessage({ action: 'openFile', path: request.path });
+    return true;
+  }
+
+  if (request.action === 'controlDownload') {
+    const port = chrome.runtime.connectNative('com.br.download.manager');
+    port.onMessage.addListener((response) => { sendResponse(response); port.disconnect(); });
+    port.onDisconnect.addListener(() => {
+      if (chrome.runtime.lastError) sendResponse({status: 'error', message: chrome.runtime.lastError.message});
+    });
+    port.postMessage({ action: request.command, gid: request.gid });
+    return true;
+  }
+
+  if (request.action === 'getActiveCount') {
+    fetchAria2Status().then(data => sendResponse({count: data.active ? data.active.length : 0}));
+    return true;
+  }
+});
+
 function sendToNativeHost(message) {
   const port = chrome.runtime.connectNative('com.br.download.manager');
-
   port.onMessage.addListener((response) => {
     console.log("Response from Rust:", response);
     if (response.gid) {
@@ -315,75 +265,11 @@ function sendToNativeHost(message) {
     }
     port.disconnect();
   });
-
   port.onDisconnect.addListener(() => {
-    if (chrome.runtime.lastError) {
-      console.error("Native Host Error:", chrome.runtime.lastError.message);
-    }
+    if (chrome.runtime.lastError) console.error("Native Host Error:", chrome.runtime.lastError.message);
   });
-
   port.postMessage(message);
 }
-
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'getDownloads') {
-    fetchAria2Status().then(sendResponse);
-    return true;
-  }
-
-  if (request.action === 'openFile') {
-    const port = chrome.runtime.connectNative('com.br.download.manager');
-
-    port.onMessage.addListener((response) => {
-      console.log("Open file response:", response);
-      sendResponse(response);
-      port.disconnect();
-    });
-
-    port.onDisconnect.addListener(() => {
-      if (chrome.runtime.lastError) {
-        sendResponse({status: 'error', message: chrome.runtime.lastError.message});
-      }
-    });
-
-    port.postMessage({
-      action: 'openFile',
-      path: request.path
-    });
-    return true;
-  }
-
-  if (request.action === 'controlDownload') {
-    const port = chrome.runtime.connectNative('com.br.download.manager');
-
-    port.onMessage.addListener((response) => {
-      console.log("Control response:", response);
-      sendResponse(response);
-      port.disconnect();
-    });
-
-    port.onDisconnect.addListener(() => {
-      if (chrome.runtime.lastError) {
-        sendResponse({status: 'error', message: chrome.runtime.lastError.message});
-      }
-    });
-
-    port.postMessage({
-      action: request.command,
-      gid: request.gid
-    });
-    return true;
-  }
-
-  if (request.action === 'getActiveCount') {
-    fetchAria2Status().then(data => {
-      const count = data.active ? data.active.length : 0;
-      sendResponse({count});
-    });
-    return true;
-  }
-});
 
 const ARIA2_RPC = 'http://127.0.0.1:6800/jsonrpc';
 
@@ -413,9 +299,7 @@ async function fetchAria2Status() {
       aria2Call('aria2.tellWaiting', [0, 100]),
       aria2Call('aria2.tellStopped', [0, 50])
     ]);
-
     manageTabDiscard(active.length > 0);
-
     return {active, waiting, stopped};
   } catch (e) {
     const msg = e.name === 'AbortError'
@@ -425,54 +309,37 @@ async function fetchAria2Status() {
   }
 }
 
-// Discard browser tabs when download is active to free network bandwidth
 async function manageTabDiscard(hasActiveDownloads) {
   if (hasActiveDownloads && !tabDiscarded) {
     try {
       const tabs = await chrome.tabs.query({});
       discardedTabIds = [];
-
       for (const tab of tabs) {
         if (tab.active || tab.pinned || tab.discarded) continue;
         if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://'))) continue;
-
         try {
           await chrome.tabs.discard(tab.id);
           discardedTabIds.push(tab.id);
-        } catch (e) {
-          // Tab might not be discardable
-        }
+        } catch (e) {}
       }
       tabDiscarded = true;
       const count = discardedTabIds.length;
-      console.log(`Discarded ${count} tabs to free network for download`);
       if (count > 0) {
         chrome.notifications.create('tabs-discarded', {
-          type: 'basic',
-          iconUrl: 'icon48.png',
-          title: 'BR Download Manager',
-          message: `${count} tab diistirahatkan sementara untuk fokus bandwidth download.\nTab akan dikembalikan otomatis setelah download selesai.`,
+          type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
+          message: `${count} tab diistirahatkan sementara untuk fokus bandwidth download.`,
           priority: 1
         });
       }
-    } catch (e) {
-      console.error("Tab discard error:", e);
-    }
+    } catch (e) {}
   } else if (!hasActiveDownloads && tabDiscarded) {
     for (const tabId of discardedTabIds) {
-      try {
-        await chrome.tabs.reload(tabId);
-      } catch (e) {
-        // Tab might have been closed already
-      }
+      try { await chrome.tabs.reload(tabId); } catch (e) {}
     }
     const count = discardedTabIds.length;
-    console.log(`Restored ${count} tabs after download`);
     if (count > 0) {
       chrome.notifications.create('tabs-restored', {
-        type: 'basic',
-        iconUrl: 'icon48.png',
-        title: 'BR Download Manager',
+        type: 'basic', iconUrl: 'icon48.png', title: 'BR Download Manager',
         message: `Download selesai! ${count} tab sudah dikembalikan.`,
         priority: 1
       });
@@ -482,9 +349,6 @@ async function manageTabDiscard(hasActiveDownloads) {
   }
 }
 
-// Restore GIDs from storage on startup
 chrome.storage.local.get('downloadGids', (data) => {
-  if (data.downloadGids) {
-    downloadGids = new Set(data.downloadGids);
-  }
+  if (data.downloadGids) downloadGids = new Set(data.downloadGids);
 });
