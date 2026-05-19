@@ -87,6 +87,29 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   }
 });
 
+// Check if a partial/failed download with same filename exists in aria2
+async function findExistingDownload(filename) {
+  try {
+    const stopped = await aria2Call('aria2.tellStopped', [0, 200]);
+    if (!stopped || !Array.isArray(stopped)) return null;
+
+    for (const dl of stopped) {
+      if (!dl.files) continue;
+      for (const file of dl.files) {
+        if (!file.path) continue;
+        const existingName = file.path.replace(/\\/g, '/').split('/').pop();
+        if (existingName === filename && dl.status === 'error') {
+          // Found a failed download with same name - return its info for resume
+          return { gid: dl.gid, path: file.path, completedLength: dl.completedLength };
+        }
+      }
+    }
+  } catch (e) {
+    console.log('findExistingDownload error:', e);
+  }
+  return null;
+}
+
 async function processDownload(downloadId) {
   const pending = pendingDownloads[downloadId];
   if (!pending) return;
@@ -155,13 +178,24 @@ async function processDownload(downloadId) {
     if (originalName) outFilename = originalName;
   }
 
-  console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}`);
+  // Check aria2 for existing partial download with same filename
+  let isResume = false;
+  const existing = await findExistingDownload(outFilename);
+  if (existing) {
+    console.log(`Found existing download ${existing.gid} for ${outFilename} (${existing.completedLength} bytes) - resuming`);
+    // Remove old entry so we can re-add with same path
+    try { await aria2Call('aria2.removeDownloadResult', [existing.gid]); } catch (e) {}
+    isResume = true;
+  }
+
+  console.log(`Sending to native host: url=${downloadUrl}, file=${outFilename}, dir=${downloadDir}, resume=${isResume}`);
 
   sendToNativeHost({
     url: downloadUrl,
     filename: outFilename,
     dir: downloadDir,
-    headers: headers
+    headers: headers,
+    is_resume: isResume
   });
 
   // Cleanup

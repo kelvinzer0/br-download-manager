@@ -17,6 +17,8 @@ struct DownloadMessage {
     path: Option<String>,
     #[serde(default)]
     is_retry: bool,
+    #[serde(default)]
+    is_resume: bool,
 }
 
 #[derive(Serialize)]
@@ -331,10 +333,15 @@ async fn add_to_aria2(msg: DownloadMessage) -> Result<String, Box<dyn std::error
 
     let mut options = serde_json::Map::new();
 
-    // Resolve unique filename - skip for retries (reuse same file, aria2 resumes via .aria2 control)
+    // Resolve unique filename - skip for retries/resumes (reuse same file)
     if let Some(filename) = msg.filename {
         let dir = msg.dir.as_deref().unwrap_or(".");
-        let out_name = if msg.is_retry {
+        let out_name = if msg.is_retry || msg.is_resume {
+            // Resume: reuse same file, aria2 continues via .aria2 control file
+            if msg.is_resume {
+                options.insert("continue".to_string(), json!("true"));
+                options.insert("allow-overwrite".to_string(), json!("true"));
+            }
             filename.clone()
         } else {
             unique_filename(dir, &filename)
